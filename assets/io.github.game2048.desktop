@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=2048
+GenericName=Puzzle game
+Comment=Slide and merge tiles to reach 2048
+Exec=2048
+Icon=io.github.game2048
+Terminal=false
+Categories=Game;LogicGame;
+Keywords=2048;puzzle;tiles;merge;
+StartupWMClass=io.github.game2048

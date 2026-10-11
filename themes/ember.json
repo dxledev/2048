@@ -1,0 +1,18 @@
+{
+    "colors": {
+        "accent": "#f08a4b",
+        "accent_text": "#1d0f06",
+        "background": "#17110e",
+        "board": "#251c17",
+        "border": "#3a2c24",
+        "cell": "#30251e",
+        "highlight": "#f6c65b",
+        "muted": "#a8968a",
+        "secondary": "#e2574c",
+        "surface": "#201813",
+        "surface_alt": "#2a1f19",
+        "text": "#f4e9df"
+    },
+    "name": "ember",
+    "version": 1
+}
