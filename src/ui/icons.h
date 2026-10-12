@@ -8,7 +8,7 @@
 namespace g2048 {
 
 /** @brief Line icons drawn with QPainter, so every glyph takes any theme color. */
-enum class Glyph { Undo, Restart, Trophy, Grid, Chart };
+enum class Glyph { Undo, Restart, Trophy, Grid, Chart, Swap, Remove };
 
 /** @brief Stroke @p glyph into @p bounds, designed on a 24-unit grid. */
 void paintGlyph(QPainter &painter, Glyph glyph, const QRectF &bounds, const QColor &color);

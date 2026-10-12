@@ -54,7 +54,7 @@ Options parseOptions(QStringList arguments) {
                 bool valid = false;
                 result.size = value.toInt(&valid);
                 if (!valid || result.size < Game::minimumSize || result.size > Game::maximumSize)
-                    throw std::invalid_argument("--size requires a board size from 3 to 8");
+                    throw std::invalid_argument("--size requires a board size from 3 to 5");
             }
         } else if (argument == "--opaque") {
             result.opaque = true;
@@ -79,7 +79,7 @@ void printHelp() {
     QTextStream(stdout) << R"(2048 — slide, merge, and reach the 2048 tile
 
 Usage:
-  2048 [--size 3-8] [--opaque] [--config-dir DIRECTORY]
+  2048 [--size 3-5] [--opaque] [--config-dir DIRECTORY]
   2048 theme list | keys | path | show
   2048 theme preset NAME                       built-in palette (see theme list)
   2048 theme set KEY=COLOR [KEY=COLOR ...]     edit individual colors

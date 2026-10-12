@@ -7,6 +7,9 @@
  * the board before mutating it. Tiles keep their identity unless they merge,
  * which gives the UI enough detail to animate each turn. Parsing validates
  * every value and assigns fresh identities, which are never serialized.
+ * Power-ups (undo, swap, remove) spend limited charges that merging their
+ * reward tile earns back; undo revokes the charges earned by the undone move.
+ * Classic mode has no charges and keeps no history.
  */
 #include "game.h"
 
@@ -17,6 +20,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 namespace g2048 {
 namespace {
@@ -60,12 +64,20 @@ void reset(Turn &turn) {
     turn.merged.clear();
     turn.spawned = -1;
     turn.gained = 0;
+    turn.earned = {};
 }
 
 QJsonArray valuesArray(const std::vector<Tile> &cells) {
     QJsonArray values;
     for (const auto &tile : cells)
         values.append(tile.value);
+    return values;
+}
+
+QJsonArray chargesArray(const std::array<int, Game::powerCount> &charges) {
+    QJsonArray values;
+    for (int count : charges)
+        values.append(count);
     return values;
 }
 
@@ -86,7 +98,45 @@ bool readBool(const QJsonValue &value, const char *what) {
     return value.toBool();
 }
 
-Snapshot readSnapshot(const QJsonObject &data, int count, int &nextId) {
+/** @brief Charges a fresh game of @p mode starts with: none in Classic. */
+std::array<int, Game::powerCount> startingCharges(Mode mode) {
+    std::array<int, Game::powerCount> charges{};
+    if (mode == Mode::PowerUps)
+        for (int index = 0; index < Game::powerCount; ++index)
+            charges[index] = Game::startingCharges(static_cast<Power>(index));
+    return charges;
+}
+
+/** @brief Optional charges: missing means the starting charges; present must be in range. */
+std::array<int, Game::powerCount> readCharges(const QJsonObject &data, Mode mode) {
+    if (!data.contains("charges"))
+        return startingCharges(mode);
+    std::array<int, Game::powerCount> charges{};
+    const auto values = data.value("charges").toArray();
+    if (!data.value("charges").isArray() || values.size() != Game::powerCount)
+        invalid("charges");
+    for (int index = 0; index < Game::powerCount; ++index) {
+        charges[index] = readInteger(values[index], 0, Game::maximumCharges, "charges");
+        if (mode == Mode::Classic && charges[index])
+            invalid("charges");
+    }
+    return charges;
+}
+
+Mode readMode(const QJsonObject &data) {
+    if (!data.contains("mode"))
+        return Mode::PowerUps;
+    const auto name = data.value("mode").toString();
+    if (!data.value("mode").isString())
+        invalid("mode");
+    if (name == "powerups")
+        return Mode::PowerUps;
+    if (name == "classic")
+        return Mode::Classic;
+    invalid("mode");
+}
+
+Snapshot readSnapshot(const QJsonObject &data, int count, int &nextId, Mode mode) {
     const auto values = data.value("values").toArray();
     if (!data.value("values").isArray() || values.size() != count)
         invalid("values");
@@ -102,15 +152,71 @@ Snapshot readSnapshot(const QJsonObject &data, int count, int &nextId) {
     snapshot.won = readBool(data.value("won"), "won");
     if (!snapshot.won && reachesGoal(snapshot.cells))
         invalid("won");
+    snapshot.charges = readCharges(data, mode);
     return snapshot;
 }
 
 }
 
-Game::Game(int size, std::uint64_t seed)
-    : size_(checkedSize(size)), cells_(static_cast<std::size_t>(size_ * size_)), random_(seed) {
+Game::Game(int size, Mode mode, std::uint64_t seed)
+    : size_(checkedSize(size)), mode_(mode), cells_(static_cast<std::size_t>(size_ * size_)), random_(seed) {
+    charges_ = g2048::startingCharges(mode_);
     spawn();
     turn_.spawned = spawn();
+}
+
+int Game::charges(Power power) const {
+    return charges_[static_cast<int>(power)];
+}
+
+bool Game::canSwap(int first, int second) const {
+    const int count = size_ * size_;
+    if (charges_[static_cast<int>(Power::Swap)] <= 0 || first < 0 || second < 0 || first >= count || second >= count
+        || first == second || !cells_[first].value || !cells_[second].value)
+        return false;
+    return cells_[first].value != cells_[second].value;
+}
+
+bool Game::swap(int first, int second) {
+    if (!canSwap(first, second))
+        return false;
+    checkpoint();
+    reset(turn_);
+    for (int index = 0; index < size_ * size_; ++index) {
+        const auto &tile = cells_[index];
+        if (!tile.value)
+            continue;
+        const int to = index == first ? second : index == second ? first : index;
+        turn_.motions.push_back({tile.id, tile.value, index, to, false});
+    }
+    std::swap(cells_[first], cells_[second]);
+    --charges_[static_cast<int>(Power::Swap)];
+    return true;
+}
+
+bool Game::canRemove(int value) const {
+    return charges_[static_cast<int>(Power::Remove)] > 0
+        && std::any_of(cells_.begin(), cells_.end(), [value](const Tile &tile) { return tile.value && tile.value == value; });
+}
+
+bool Game::remove(int value) {
+    if (!canRemove(value))
+        return false;
+    checkpoint();
+    reset(turn_);
+    for (auto &tile : cells_) {
+        if (tile.value == value)
+            tile = {};
+    }
+    --charges_[static_cast<int>(Power::Remove)];
+    for (int index = 0; index < size_ * size_; ++index) {
+        const auto &tile = cells_[index];
+        if (tile.value)
+            turn_.motions.push_back({tile.id, tile.value, index, index, false});
+    }
+    if (std::all_of(cells_.begin(), cells_.end(), [](const Tile &tile) { return !tile.value; }))
+        turn_.spawned = spawn();
+    return true;
 }
 
 int Game::highest() const {
@@ -146,10 +252,8 @@ bool Game::canMove(Direction direction) const {
 bool Game::move(Direction direction) {
     if (!canMove(direction))
         return false;
-    if (static_cast<int>(history_.size()) >= maximumHistory)
-        history_.erase(history_.begin());
-    history_.push_back(snapshot());
-    const auto &before = history_.back().cells;
+    checkpoint();
+    const auto before = cells_;
     std::fill(cells_.begin(), cells_.end(), Tile{});
     reset(turn_);
     long long gained = 0;
@@ -178,6 +282,18 @@ bool Game::move(Direction direction) {
     turn_.gained = static_cast<int>(std::min(gained, intLimit));
     score_ = static_cast<int>(std::min(score_ + gained, intLimit));
     won_ = won_ || reachesGoal(cells_);
+    if (mode_ == Mode::PowerUps) {
+        for (int cell : turn_.merged) {
+            for (int index = 0; index < powerCount; ++index) {
+                if (cells_[cell].value == rewardValue(static_cast<Power>(index)))
+                    ++turn_.earned[index];
+            }
+        }
+        for (int index = 0; index < powerCount; ++index) {
+            turn_.earned[index] = std::min(turn_.earned[index], maximumCharges - charges_[index]);
+            charges_[index] += turn_.earned[index];
+        }
+    }
     turn_.spawned = spawn();
     if (moves_ < intLimit)
         ++moves_;
@@ -185,42 +301,56 @@ bool Game::move(Direction direction) {
 }
 
 bool Game::undo() {
-    if (history_.empty())
+    if (!canUndo())
         return false;
     auto &previous = history_.back();
     cells_ = std::move(previous.cells);
     score_ = previous.score;
     won_ = previous.won;
+    // Charges earned by the undone move are revoked, spent ones are not refunded.
+    for (int index = 0; index < powerCount; ++index)
+        charges_[index] = std::min(charges_[index], previous.charges[index]);
+    auto &undoCharges = charges_[static_cast<int>(Power::Undo)];
+    undoCharges = std::max(0, undoCharges - 1);
     history_.pop_back();
     reset(turn_);
     return true;
 }
 
+void Game::setCharges(Power power, int count) {
+    charges_[static_cast<int>(power)] = mode_ == Mode::PowerUps ? std::clamp(count, 0, maximumCharges) : 0;
+}
+
 QJsonObject Game::toJson() const {
     QJsonArray history;
     for (const auto &entry : history_)
-        history.append(QJsonObject{{"values", valuesArray(entry.cells)}, {"score", entry.score}, {"won", entry.won}});
-    return {{"version", 1}, {"size", size_}, {"values", valuesArray(cells_)}, {"score", score_},
-            {"moves", moves_}, {"won", won_}, {"continued", continued_}, {"history", history}};
+        history.append(QJsonObject{{"values", valuesArray(entry.cells)}, {"score", entry.score}, {"won", entry.won},
+                                   {"charges", chargesArray(entry.charges)}});
+    return {{"version", 1}, {"size", size_}, {"mode", mode_ == Mode::PowerUps ? "powerups" : "classic"},
+            {"values", valuesArray(cells_)}, {"score", score_}, {"moves", moves_}, {"won", won_},
+            {"continued", continued_}, {"charges", chargesArray(charges_)}, {"history", history}};
 }
 
 Game Game::fromJson(const QJsonObject &data, std::uint64_t seed) {
     readInteger(data.value("version"), 1, 1, "version");
     const int size = readInteger(data.value("size"), minimumSize, maximumSize, "size");
+    const Mode mode = readMode(data);
     const auto history = data.value("history").toArray();
-    if (!data.value("history").isArray() || history.size() > maximumHistory)
+    if (!data.value("history").isArray() || history.size() > maximumHistory
+        || (mode == Mode::Classic && !history.isEmpty()))
         invalid("history");
-    Game game(size, seed);
+    Game game(size, mode, seed);
     game.nextId_ = 1;
     for (const auto &entry : history) {
         if (!entry.isObject())
             invalid("history");
-        game.history_.push_back(readSnapshot(entry.toObject(), size * size, game.nextId_));
+        game.history_.push_back(readSnapshot(entry.toObject(), size * size, game.nextId_, mode));
     }
-    auto state = readSnapshot(data, size * size, game.nextId_);
+    auto state = readSnapshot(data, size * size, game.nextId_, mode);
     game.cells_ = std::move(state.cells);
     game.score_ = state.score;
     game.won_ = state.won;
+    game.charges_ = state.charges;
     game.moves_ = readInteger(data.value("moves"), 0, intLimit, "moves");
     game.continued_ = readBool(data.value("continued"), "continued");
     reset(game.turn_);
@@ -254,8 +384,16 @@ int Game::spawn() {
     return -1;
 }
 
+void Game::checkpoint() {
+    if (mode_ == Mode::Classic)
+        return;
+    if (static_cast<int>(history_.size()) >= maximumHistory)
+        history_.erase(history_.begin());
+    history_.push_back(snapshot());
+}
+
 Snapshot Game::snapshot() const {
-    return {cells_, score_, won_};
+    return {cells_, score_, won_, charges_};
 }
 
 }

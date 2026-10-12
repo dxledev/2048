@@ -33,7 +33,7 @@ void step(Stats &stats, Game &game, Direction direction, qint64 now) {
 
 /** @brief Start a game on @p size, make one merging move, and leave it live. */
 void playOne(Stats &stats, Game &game, int size, qint64 now) {
-    game = Game(size, 3);
+    game = Game(size, Mode::PowerUps, 3);
     stats.begin(game, now);
     game.setValues(cells({2, 2}, size));
     step(stats, game, Direction::Left, now + 1000);
@@ -41,7 +41,7 @@ void playOne(Stats &stats, Game &game, int size, qint64 now) {
 
 /** @brief Live game that reaches 2048 on its first move. */
 void winOne(Stats &stats, Game &game, qint64 now) {
-    game = Game(4, 5);
+    game = Game(4, Mode::PowerUps, 5);
     stats.begin(game, now);
     game.setValues(cells({1024, 1024}), 1000);
     step(stats, game, Direction::Left, now + 1000);
@@ -73,12 +73,15 @@ Stats played() {
     Stats stats;
     std::mt19937 random(11);
     qint64 now = 1'700'000'000'000;
-    for (const int size : {4, 3, 5, 4, 8}) {
-        Game game(size, size * 17);
+    for (const int size : {4, 3, 5, 4, 3}) {
+        Game game(size, Mode::PowerUps, size * 17);
         stats.begin(game, now);
         for (int move = 0; move < 60 && randomMove(stats, game, random, now += 1500); ++move) {
-            if (move % 13 == 12 && game.undo())
-                stats.recordUndo(game, now += 700);
+            if (move % 13 == 12) {
+                game.setCharges(Power::Undo, Game::maximumCharges);
+                if (game.undo())
+                    stats.recordUndo(game, now += 700);
+            }
         }
     }
     return stats;
@@ -91,7 +94,7 @@ class StatsTests : public QObject {
 private slots:
     void freshGameHasNoTotals() {
         Stats stats;
-        const Game game(4, 1);
+        const Game game(4, Mode::PowerUps, 1);
         stats.begin(game, 1000);
         QCOMPARE(stats.since(), 1000);
         QCOMPARE(stats.current().started, 1000);
@@ -103,7 +106,7 @@ private slots:
 
     void moveUpdatesLiveGame() {
         Stats stats;
-        Game game(4, 2);
+        Game game(4, Mode::PowerUps, 2);
         stats.begin(game, 0);
         game.setValues(cells({2, 2, 4, 4}));
         const auto spawned = stats.spawnedTwos() + stats.spawnedFours();
@@ -126,9 +129,9 @@ private slots:
 
     void zeroMoveGamesAreNotCounted() {
         Stats stats;
-        stats.begin(Game(4, 1), 5);
-        stats.begin(Game(5, 1), 10);
-        stats.begin(Game(4, 1), 20);
+        stats.begin(Game(4, Mode::PowerUps, 1), 5);
+        stats.begin(Game(5, Mode::PowerUps, 1), 10);
+        stats.begin(Game(4, Mode::PowerUps, 1), 20);
         QCOMPARE(stats.recent().size(), std::size_t(0));
         QCOMPARE(stats.totals().games, 0);
         QCOMPARE(stats.since(), 5);
@@ -140,7 +143,7 @@ private slots:
         Game game;
         playOne(stats, game, 4, 100);
         const auto live = stats.current();
-        stats.begin(Game(4, 9), 5000);
+        stats.begin(Game(4, Mode::PowerUps, 9), 5000);
         QCOMPARE(stats.recent().size(), std::size_t(1));
         QCOMPARE(stats.recent().back(), live);
         QCOMPARE(stats.current().moves, 0);
@@ -163,7 +166,7 @@ private slots:
         QCOMPARE(totals.winRate(), 1.0);
         QCOMPARE(stats.currentStreak(), 1);
 
-        game = Game(4, 6);
+        game = Game(4, Mode::PowerUps, 6);
         stats.begin(game, 5000);
         game.setValues(cells({512, 512, 1024}));
         step(stats, game, Direction::Left, 6000);
@@ -195,7 +198,7 @@ private slots:
         QCOMPARE(stats.currentStreak(), 2);
 
         loseOne(stats, game, 40'000);
-        stats.begin(Game(4, 1), 50'000);
+        stats.begin(Game(4, Mode::PowerUps, 1), 50'000);
         QCOMPARE(stats.currentStreak(), 0);
         QCOMPARE(stats.bestStreak(), 2);
         QCOMPARE(stats.totals().losses, 1);
@@ -223,7 +226,7 @@ private slots:
 
     void idleTimeIsCapped() {
         Stats stats;
-        Game game(4, 1);
+        Game game(4, Mode::PowerUps, 1);
         stats.begin(game, 1000);
         game.setValues(cells({2, 0, 0, 0, 4}));
         step(stats, game, Direction::Right, 6000);
@@ -239,7 +242,7 @@ private slots:
 
     void suspendStopsTheClock() {
         Stats stats;
-        Game game(4, 1);
+        Game game(4, Mode::PowerUps, 1);
         stats.begin(game, 1000);
         game.setValues(cells({2, 0, 0, 0, 4}));
         stats.suspend();
@@ -262,7 +265,7 @@ private slots:
         QCOMPARE(stats.current().lastActive, 0);
         QCOMPARE(stats.recent().size(), std::size_t(0));
 
-        const Game other(5, 4);
+        const Game other(5, Mode::PowerUps, 4);
         stats.attach(other, 120'000);
         QCOMPARE(stats.recent().size(), std::size_t(1));
         QCOMPARE(stats.current().size, 5);
@@ -280,7 +283,7 @@ private slots:
         Game game;
         for (int index = 0; index < 35; ++index)
             playOne(stats, game, 4, index * 10'000);
-        stats.begin(Game(4, 1), 1'000'000);
+        stats.begin(Game(4, Mode::PowerUps, 1), 1'000'000);
         QCOMPARE(int(stats.recent().size()), Stats::maximumRecent);
         QCOMPARE(stats.recent().front().started, 50'000);
         QCOMPARE(stats.recent().back().started, 340'000);
@@ -326,7 +329,7 @@ private slots:
 
     void directionsAndSpawns() {
         Stats stats;
-        Game game(4, 21);
+        Game game(4, Mode::PowerUps, 21);
         stats.begin(game, 1);
         long long tiles = stats.spawnedTwos() + stats.spawnedFours();
         std::array<long long, 4> expected{};
@@ -348,12 +351,12 @@ private slots:
     void resetForgetsEverything() {
         Stats stats = played();
         QVERIFY(stats.totals().games > 0);
-        const Game game(6, 2);
+        const Game game(5, Mode::PowerUps, 2);
         stats.reset(game, 42);
         QCOMPARE(stats.totals().games, 0);
         QCOMPARE(stats.recent().size(), std::size_t(0));
         QCOMPARE(stats.since(), 42);
-        QCOMPARE(stats.current().size, 6);
+        QCOMPARE(stats.current().size, 5);
         QCOMPARE(stats.bestStreak(), 0);
         QCOMPARE(stats.spawnedTwos() + stats.spawnedFours(), 2);
         for (const auto count : stats.directions())
@@ -379,6 +382,31 @@ private slots:
         saveStats(path, stats);
         QCOMPARE(loadStats(path).toJson(), json);
         QVERIFY_THROWS_EXCEPTION(std::runtime_error, loadStats(directory.filePath("missing.json")));
+    }
+
+    void retiredSizesAreDropped() {
+        const auto original = played().toJson();
+        auto data = original;
+        auto recent = data.value("recent").toArray();
+        auto retiredRecord = recent.first().toObject();
+        retiredRecord.insert("size", 7);
+        recent.append(retiredRecord);
+        data.insert("recent", recent);
+        auto sizes = data.value("sizes").toObject();
+        sizes.insert("8", sizes.value("4"));
+        data.insert("sizes", sizes);
+        auto current = data.value("current").toObject();
+        current.insert("size", 6);
+        data.insert("current", current);
+
+        const auto restored = Stats::fromJson(data).toJson();
+        QVERIFY(restored.value("sizes").toObject() == original.value("sizes").toObject());
+        QVERIFY(restored.value("recent").toArray() == original.value("recent").toArray());
+        QCOMPARE(restored.value("current").toObject().value("moves").toInt(), 0);
+        QCOMPARE(restored.value("current").toObject().value("size").toInt(), GameRecord{}.size);
+        QCOMPARE(restored.value("streak").toInt(), original.value("streak").toInt());
+        QCOMPARE(restored.value("bestStreak").toInt(), original.value("bestStreak").toInt());
+        QCOMPARE(Stats::fromJson(data).totals(8).games, 0);
     }
 
     void rejectsMalformedJson_data() {
@@ -414,7 +442,7 @@ private slots:
         case 1: data.insert("since", -1); break;
         case 2: edit("current", [](QJsonObject &record) { record.insert("score", 1.5); }); break;
         case 3: data.insert("directions", QJsonArray{1e300, 0, 0, 0}); break;
-        case 4: edit("current", [](QJsonObject &record) { record.insert("size", 9); }); break;
+        case 4: edit("current", [](QJsonObject &record) { record.insert("size", 2); }); break;
         case 5: edit("current", [](QJsonObject &record) { record.insert("highest", 6); }); break;
         case 6:
             while (recent.size() <= Stats::maximumRecent)

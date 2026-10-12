@@ -54,32 +54,43 @@ void writeJson(const QString &path, const QJsonObject &data, QJsonDocument::Json
         fail(path + ": " + file.errorString());
 }
 
-void saveSession(const QString &path, const Game &game, const BestScores &best) {
-    QJsonObject scores;
-    for (auto entry = best.constBegin(); entry != best.constEnd(); ++entry)
-        scores.insert(QString::number(entry.key()), entry.value());
-    writeJson(path, {{"version", 1}, {"game", game.toJson()}, {"best", scores}}, QJsonDocument::Compact);
+void saveSession(const QString &path, const Game &game, const ModeBests &best) {
+    const auto scores = [](const BestScores &best) {
+        QJsonObject scores;
+        for (auto entry = best.constBegin(); entry != best.constEnd(); ++entry)
+            scores.insert(QString::number(entry.key()), entry.value());
+        return scores;
+    };
+    writeJson(path, {{"version", 1}, {"game", game.toJson()}, {"best", scores(best[int(Mode::PowerUps)])},
+                     {"bestClassic", scores(best[int(Mode::Classic)])}},
+              QJsonDocument::Compact);
 }
 
-Game loadSession(const QString &path, BestScores &best) {
+Game loadSession(const QString &path, ModeBests &best) {
     const auto data = readJson(path);
     if (data.value("version").toInt() != 1)
         fail("Unsupported session version");
-    if (!data.value("game").isObject() || !data.value("best").isObject())
+    // Sessions from before Classic mode have no "bestClassic"; their scores count as Standard.
+    if (!data.value("game").isObject() || !data.value("best").isObject()
+        || !(data.value("bestClassic").isObject() || data.value("bestClassic").isUndefined()))
         fail("Invalid session layout");
-    BestScores scores;
-    const auto saved = data.value("best").toObject();
-    for (auto entry = saved.constBegin(); entry != saved.constEnd(); ++entry) {
-        bool valid = false;
-        const int size = entry.key().toInt(&valid);
-        const double score = entry.value().toDouble(-1);
-        if (!valid || size < Game::minimumSize || size > Game::maximumSize
-            || score < 0 || score > 2147483647.0 || score != int(score))
-            fail("Invalid best score");
-        scores.insert(size, int(score));
+    ModeBests scores;
+    for (const auto mode : {Mode::PowerUps, Mode::Classic}) {
+        const auto saved = data.value(mode == Mode::Classic ? "bestClassic" : "best").toObject();
+        for (auto entry = saved.constBegin(); entry != saved.constEnd(); ++entry) {
+            bool valid = false;
+            const int size = entry.key().toInt(&valid);
+            const double score = entry.value().toDouble(-1);
+            if (!valid || size < Game::minimumSize || score < 0 || score > 2147483647.0 || score != int(score))
+                fail("Invalid best score");
+            // Scores for boards no longer offered are dropped rather than rejected.
+            if (size <= Game::maximumSize)
+                scores[int(mode)].insert(size, int(score));
+        }
     }
     auto game = Game::fromJson(data.value("game").toObject());
-    scores[game.size()] = std::max(scores.value(game.size()), game.score());
+    auto &own = scores[int(game.mode())];
+    own[game.size()] = std::max(own.value(game.size()), game.score());
     best = std::move(scores);
     return game;
 }

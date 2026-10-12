@@ -51,6 +51,11 @@ int readTile(const QJsonValue &value, const std::string &what) {
     return tile;
 }
 
+/** @brief True for a board size that is numeric but no longer offered; such data is dropped, not rejected. */
+bool retired(const QJsonValue &size) {
+    return size.isDouble() && size.toDouble() > Game::maximumSize;
+}
+
 QJsonObject readObject(const QJsonValue &value, const std::string &what) {
     if (!value.isObject())
         invalid(what);
@@ -182,7 +187,7 @@ int Totals::reached(int value) const {
     return games;
 }
 
-void Stats::begin(const Game &game, qint64 now) {
+void Stats::finish() {
     if (current_.moves > 0) {
         recent_.push_back(current_);
         if (static_cast<int>(recent_.size()) > maximumRecent)
@@ -191,9 +196,13 @@ void Stats::begin(const Game &game, qint64 now) {
         streak_ = current_.won() ? streak_ + 1 : 0;
         bestStreak_ = std::max(bestStreak_, streak_);
     }
+    current_ = GameRecord{};
+}
+
+void Stats::begin(const Game &game, qint64 now) {
+    finish();
     if (!since_)
         since_ = now;
-    current_ = GameRecord{};
     current_.size = game.size();
     current_.started = now;
     current_.lastActive = now;
@@ -294,28 +303,37 @@ Stats Stats::fromJson(const QJsonObject &data) {
     readInt(data.value("version"), "version", 1, 1);
     Stats stats;
     stats.since_ = readCount(data.value("since"), countLimit, "start time");
-    stats.current_ = readRecord(data.value("current"), "current game");
+    // A live game on a retired board is replaced by an empty record so it is never finished into totals.
+    if (!retired(data.value("current").toObject().value("size")))
+        stats.current_ = readRecord(data.value("current"), "current game");
     if (!data.value("recent").isArray())
         invalid("recent games");
     const auto recent = data.value("recent").toArray();
     if (recent.size() > maximumRecent)
         invalid("too many recent games");
     for (const auto &entry : recent) {
+        if (retired(entry.toObject().value("size")))
+            continue;
         stats.recent_.push_back(readRecord(entry, "recent game"));
         if (!stats.recent_.back().moves)
             invalid("recent game without moves");
     }
     long long games = 0;
+    long long kept = 0;
     const auto sizes = readObject(data.value("sizes"), "sizes");
     for (auto entry = sizes.constBegin(); entry != sizes.constEnd(); ++entry) {
         bool valid = false;
         const int size = entry.key().toInt(&valid);
-        if (!valid || entry.key() != QString::number(size) || size < Game::minimumSize || size > Game::maximumSize)
+        if (!valid || entry.key() != QString::number(size) || size < Game::minimumSize)
             invalid("board size");
-        stats.finished_[size] = readTotals(entry.value(), "size " + std::to_string(size));
-        games += stats.finished_[size].games;
+        const auto totals = readTotals(entry.value(), "size " + std::to_string(size));
+        games += totals.games;
+        if (size > Game::maximumSize)
+            continue;
+        stats.finished_[size] = totals;
+        kept += totals.games;
     }
-    if (games < static_cast<long long>(stats.recent_.size()))
+    if (kept < static_cast<long long>(stats.recent_.size()))
         invalid("more recent games than finished games");
     const auto directions = data.value("directions").toArray();
     if (!data.value("directions").isArray() || directions.size() != 4)

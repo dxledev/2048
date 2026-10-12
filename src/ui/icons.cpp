@@ -76,6 +76,22 @@ void paintGlyph(QPainter &painter, Glyph glyph, const QRectF &bounds, const QCol
                 path.addRoundedRect(QRectF(4 + column * 9, 4 + row * 9, 7, 7), 1.8, 1.8);
         }
         break;
+    case Glyph::Swap:
+        // Two tiles on a diagonal with a pair of arrows circling between them.
+        path.addRoundedRect(QRectF(3.5, 3.5, 7, 7), 1.8, 1.8);
+        path.addRoundedRect(QRectF(13.5, 13.5, 7, 7), 1.8, 1.8);
+        arrowArc(path, QRectF(3, 3, 18, 18), 80, -62);
+        arrowArc(path, QRectF(3, 3, 18, 18), 260, -62);
+        break;
+    case Glyph::Remove:
+        // Grid with its last tile crossed out.
+        for (int index = 0; index < 3; ++index)
+            path.addRoundedRect(QRectF(4 + index % 2 * 9, 4 + index / 2 * 9, 7, 7), 1.8, 1.8);
+        path.moveTo(14.5, 14.5);
+        path.lineTo(18.5, 18.5);
+        path.moveTo(18.5, 14.5);
+        path.lineTo(14.5, 18.5);
+        break;
     case Glyph::Chart:
         path.moveTo(4, 19.5);
         path.lineTo(20, 19.5);

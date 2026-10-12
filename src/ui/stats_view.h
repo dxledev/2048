@@ -8,6 +8,7 @@
 #include <QScrollArea>
 #include <QStackedWidget>
 #include <QWidget>
+#include <array>
 #include <vector>
 
 namespace g2048 {
@@ -62,18 +63,23 @@ private:
 };
 
 /**
- * @brief Content of the statistics modal: heading, tabs, size filter, and the tab pages.
+ * @brief Content of the statistics modal: heading, mode switch, tabs, size filter, and the tab pages.
  *
- * The panel reads a Stats and a Game owned by the window and rebuilds its text
+ * The panel reads the Stats of each mode and the Game owned by the window and rebuilds its text
  * from them on refresh(). Only the page below the filter scrolls; every page
  * takes the height of the tallest so the card keeps its size between tabs.
  */
 class StatsPanel : public QWidget {
     Q_OBJECT
 public:
-    explicit StatsPanel(const Stats &stats, const Game &game, QWidget *parent = nullptr);
+    /** @param stats Statistics of each mode, indexed by Mode. */
+    explicit StatsPanel(const std::array<Stats, 2> &stats, const Game &game, QWidget *parent = nullptr);
     /** @brief Board size the totals are filtered to, or 0 for every size. */
     int filter() const;
+    /** @brief Mode whose statistics are shown. */
+    Mode mode() const;
+    /** @brief Show the statistics of @p mode. */
+    void setMode(Mode mode);
     /** @brief Index of the shown tab. */
     int page() const { return pages_->currentIndex(); }
     int pageCount() const { return pages_->count(); }
@@ -90,10 +96,12 @@ protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
-    const Stats &stats_;
+    const std::array<Stats, 2> &stats_;
     const Game &game_;
-    QLabel *subtitle_;
-    QButtonGroup *tabs_, *filters_;
+    QLabel *heading_, *subtitle_;
+    QGridLayout *titles_;
+    QWidget *modeSwitch_;
+    QButtonGroup *modes_, *tabs_, *filters_;
     QScrollArea *scroll_;
     QWidget *sections_;
     QStackedWidget *pages_;
@@ -102,9 +110,11 @@ private:
     std::vector<QLabel *> values_;
     MeterList *reached_, *directions_;
     ScoreChart *chart_;
+    QWidget *currentCard_;
     QLabel *chartEmpty_, *currentTitle_;
     std::vector<QLabel *> current_, facts_;
     int columns_ = 0;
+    bool stacked_ = false; ///< The mode switch has its own row under the heading.
 };
 
 }

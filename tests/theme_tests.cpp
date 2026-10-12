@@ -1564,36 +1564,41 @@ private slots:
         QTemporaryDir dir;
         QVERIFY(dir.isValid());
         const QString path = dir.filePath("state/session.json");
-        Game game(4, 7);
+        Game game(4, Mode::PowerUps, 7);
         game.setValues({2, 2, 4, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 16}, 100);
         QVERIFY(game.move(Direction::Left));
         QVERIFY(game.move(Direction::Up) || game.move(Direction::Down));
-        const BestScores best{{3, 50}, {4, 10}, {8, 2147483647}};
+        const ModeBests best{BestScores{{3, 50}, {4, 10}, {5, 2147483647}}, BestScores{{4, 7}}};
         saveSession(path, game, best);
         const auto stored = readJson(path);
         QCOMPARE(stored.value("version").toInt(), 1);
-        QCOMPARE(stored.value("best").toObject().keys(), (QStringList{"3", "4", "8"}));
+        QCOMPARE(stored.value("best").toObject().keys(), (QStringList{"3", "4", "5"}));
+        QCOMPARE(stored.value("bestClassic").toObject().keys(), (QStringList{"4"}));
 
-        BestScores loaded{{5, 123}};
+        ModeBests loaded{BestScores{{5, 123}}, {}};
         const auto restored = loadSession(path, loaded);
         QCOMPARE(restored.toJson(), game.toJson());
         auto expected = best;
-        expected[4] = game.score();
+        expected[0][4] = game.score();
         QVERIFY(game.score() > 10);
         QCOMPARE(loaded, expected);
 
-        // A best score above the current game's is kept; a missing entry is filled in.
-        saveSession(path, game, {{4, 5000}});
+        // A best score above the current game's is kept; a missing entry is filled in for its mode only.
+        saveSession(path, game, {BestScores{{4, 5000}}, {}});
         QCOMPARE(loadSession(path, loaded).toJson(), restored.toJson());
-        QCOMPARE(loaded, (BestScores{{4, 5000}}));
+        QCOMPARE(loaded, (ModeBests{BestScores{{4, 5000}}, {}}));
         saveSession(path, game, {});
         loadSession(path, loaded);
-        QCOMPARE(loaded, (BestScores{{4, game.score()}}));
+        QCOMPARE(loaded, (ModeBests{BestScores{{4, game.score()}}, {}}));
+        Game classic(3, Mode::Classic, 5);
+        saveSession(path, classic, {BestScores{{3, 900}}, {}});
+        loadSession(path, loaded);
+        QCOMPARE(loaded, (ModeBests{BestScores{{3, 900}}, BestScores{{3, classic.score()}}}));
     }
 
     void sessionRejects_data() {
         QTest::addColumn<QJsonObject>("session");
-        Game game(4, 3);
+        Game game(4, Mode::PowerUps, 3);
         const QJsonObject valid{{"version", 1}, {"game", game.toJson()}, {"best", QJsonObject{{"4", 10}}}};
         auto withBest = [&](const QJsonObject &best) {
             auto session = valid;
@@ -1609,7 +1614,6 @@ private slots:
             return session;
         };
         QTest::newRow("size too small") << withBest({{"2", 10}});
-        QTest::newRow("size too large") << withBest({{"9", 10}});
         QTest::newRow("size not a number") << withBest({{"abc", 10}});
         QTest::newRow("size suffix") << withBest({{"4x", 10}});
         QTest::newRow("size empty") << withBest({{"", 10}});
@@ -1622,6 +1626,8 @@ private slots:
         QTest::newRow("one bad of many") << withBest({{"3", 1}, {"4", 2}, {"5", -3}});
         QTest::newRow("best array") << edit("best", QJsonArray{10});
         QTest::newRow("no best") << edit("best", QJsonValue::Undefined);
+        QTest::newRow("classic best array") << edit("bestClassic", QJsonArray{10});
+        QTest::newRow("bad classic best") << edit("bestClassic", QJsonObject{{"4", -1}});
         QTest::newRow("no game") << edit("game", QJsonValue::Undefined);
         QTest::newRow("version 2") << edit("version", 2);
         QTest::newRow("no version") << edit("version", QJsonValue::Undefined);
@@ -1635,22 +1641,23 @@ private slots:
         QVERIFY(dir.isValid());
         const QString path = dir.filePath("session.json");
         writeJson(path, session);
-        BestScores best{{4, 77}};
+        ModeBests best{BestScores{{4, 77}}, {}};
         QVERIFY_THROWS_EXCEPTION(std::runtime_error, loadSession(path, best));
-        QCOMPARE(best, (BestScores{{4, 77}}));
+        QCOMPARE(best, (ModeBests{BestScores{{4, 77}}, {}}));
     }
 
     void sessionAcceptsLimits() {
         QTemporaryDir dir;
         QVERIFY(dir.isValid());
         const QString path = dir.filePath("session.json");
-        Game game(3, 1);
+        Game game(3, Mode::PowerUps, 1);
         writeJson(path, QJsonObject{{"version", 1}, {"game", game.toJson()},
-                                    {"best", QJsonObject{{"3", 0}, {"8", 2147483647.0}, {"5", 12.0}}}});
-        BestScores best;
+                                    {"best", QJsonObject{{"3", 0}, {"5", 2147483647.0}, {"4", 12.0}, {"8", 99.0}}}});
+        ModeBests best;
         const auto loaded = loadSession(path, best);
         QCOMPARE(loaded.size(), 3);
-        QCOMPARE(best, (BestScores{{3, game.score()}, {5, 12}, {8, 2147483647}}));
+        // Sessions saved before Classic mode have no "bestClassic"; their scores are Standard.
+        QCOMPARE(best, (ModeBests{BestScores{{3, game.score()}, {4, 12}, {5, 2147483647}}, {}}));
     }
 };
 

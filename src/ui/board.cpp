@@ -1,11 +1,13 @@
 /**
  * @file board.cpp
- * @brief Board painting, tile animation, and swipe input.
+ * @brief Board painting, tile animation, swipe input, and tile picking.
  *
  * An animation has two phases: tiles slide from their previous cells, then
  * merged tiles pulse and the new tile grows in. A new move finishes any running
  * animation first, so input is never queued or dropped. Frames are painted
  * directly from game state; no per-tile widgets or cached images are kept.
+ * Swaps animate as slides between the two cells. In pick mode clicks choose a
+ * tile instead of swiping, and the tiles a click would affect are ringed.
  * While a win is pending, a WonOverlay covers the board with a blurred copy.
  */
 #include "board.h"
@@ -35,6 +37,7 @@ Board::Board(QWidget *parent) : QWidget(parent), wonOverlay_(new WonOverlay(this
     setObjectName("board");
     setAccessibleName("Game board");
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    setMouseTracking(true);
     timer_.setInterval(8);
     timer_.setTimerType(Qt::PreciseTimer);
     connect(&timer_, &QTimer::timeout, this, [this] {
@@ -67,6 +70,37 @@ void Board::animate() {
     clock_.start();
     timer_.start();
     update();
+}
+
+void Board::setPick(Pick pick) {
+    pick_ = pick;
+    selected_ = -1;
+    hovered_ = pick == Pick::None ? -1 : cellAt(mapFromGlobal(QCursor::pos()));
+    updateCursor();
+    update();
+}
+
+void Board::updateCursor() {
+    if (pick_ == Pick::None)
+        unsetCursor();
+    else
+        setCursor(hovered_ >= 0 && game_->at(hovered_).value ? Qt::PointingHandCursor : Qt::ArrowCursor);
+}
+
+void Board::setSelected(int index) {
+    selected_ = index;
+    update();
+}
+
+int Board::cellAt(const QPointF &position) const {
+    if (!game_)
+        return -1;
+    const auto board = boardRect();
+    for (int index = 0; index < game_->size() * game_->size(); ++index) {
+        if (cellRect(index, board).contains(position))
+            return index;
+    }
+    return -1;
 }
 
 void Board::finish() {
@@ -138,6 +172,37 @@ void Board::paintEvent(QPaintEvent *) {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
     paintBoard(painter, boardRect());
+    if (pick_ != Pick::None && !animating())
+        paintPicks(painter, boardRect());
+}
+
+void Board::paintPicks(QPainter &painter, const QRectF &board) const {
+    if (!game_)
+        return;
+    const QColor accent = opaque(theme_.color("accent"));
+    const auto ring = [&](int index, double strength, double weight) {
+        const auto cell = cellRect(index, board);
+        const double width = std::max(2.0, cell.width() * weight), radius = std::max(4.0, cell.width() * .1);
+        QColor veil = accent;
+        veil.setAlphaF(.22 * strength);
+        QColor line = accent;
+        line.setAlphaF(strength);
+        painter.setPen(QPen(line, width));
+        painter.setBrush(veil);
+        painter.drawRoundedRect(cell.adjusted(width / 2, width / 2, -width / 2, -width / 2), radius, radius);
+    };
+    const bool occupied = hovered_ >= 0 && game_->at(hovered_).value;
+    if (pick_ == Pick::Remove && occupied) {
+        for (int index = 0; index < game_->size() * game_->size(); ++index) {
+            if (game_->at(index).value == game_->at(hovered_).value)
+                ring(index, .85, .05);
+        }
+    } else if (pick_ == Pick::Swap) {
+        if (occupied && hovered_ != selected_)
+            ring(hovered_, .55, .04);
+        if (selected_ >= 0 && game_->at(selected_).value)
+            ring(selected_, 1, .06);
+    }
 }
 
 void Board::paintBoard(QPainter &painter, const QRectF &board) const {
@@ -184,8 +249,29 @@ void Board::resizeEvent(QResizeEvent *event) {
     wonOverlay_->setGeometry(boardRect().toRect());
 }
 
+void Board::mouseMoveEvent(QMouseEvent *event) {
+    QWidget::mouseMoveEvent(event);
+    if (pick_ == Pick::None)
+        return;
+    const int cell = cellAt(event->position());
+    if (cell != hovered_) {
+        hovered_ = cell;
+        updateCursor();
+        update();
+    }
+}
+
+void Board::leaveEvent(QEvent *event) {
+    QWidget::leaveEvent(event);
+    if (hovered_ >= 0) {
+        hovered_ = -1;
+        update();
+    }
+}
+
 void Board::mousePressEvent(QMouseEvent *event) {
     pressed_ = event->position();
+    pressedCell_ = cellAt(pressed_);
     pressing_ = event->button() == Qt::LeftButton;
     QWidget::mousePressEvent(event);
 }
@@ -195,6 +281,13 @@ void Board::mouseReleaseEvent(QMouseEvent *event) {
         return;
     pressing_ = false;
     const auto delta = event->position() - pressed_;
+    if (pick_ != Pick::None) {
+        // A click is a press and release in the same cell; a drag picks nothing.
+        const int cell = cellAt(event->position());
+        if (cell >= 0 && cell == pressedCell_)
+            emit picked(cell);
+        return;
+    }
     const double threshold = std::max(24.0, boardRect().width() * .06);
     if (std::max(std::abs(delta.x()), std::abs(delta.y())) < threshold)
         return;

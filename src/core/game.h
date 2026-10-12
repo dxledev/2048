@@ -11,6 +11,12 @@ namespace g2048 {
 /** @brief Direction in which every tile slides. */
 enum class Direction { Left, Right, Up, Down };
 
+/** @brief Limited-use power-ups; each starts with its startingCharges and is earned back by making its reward tile. */
+enum class Power { Undo, Swap, Remove };
+
+/** @brief Power-ups mode has limited undo, swap, and remove; Classic is the original game with none of them. */
+enum class Mode { PowerUps, Classic };
+
 /** @brief One occupied cell: a stable identity for animation and its face value. */
 struct Tile {
     int id = 0; ///< Unique, increasing identity; zero marks an empty cell.
@@ -33,13 +39,15 @@ struct Turn {
     std::vector<int> merged; ///< Cell indices that now hold a freshly merged tile.
     int spawned = -1; ///< Cell index of the newly spawned tile, or -1.
     int gained = 0; ///< Points earned by this move.
+    std::array<int, 3> earned{}; ///< Charges gained this turn, indexed by Power.
 };
 
-/** @brief Undoable snapshot of board, score, and win state. */
+/** @brief Undoable snapshot of board, score, win state, and charges. */
 struct Snapshot {
     std::vector<Tile> cells;
     int score = 0;
     bool won = false;
+    std::array<int, 3> charges{};
     bool operator==(const Snapshot &) const = default;
 };
 
@@ -53,14 +61,37 @@ struct Snapshot {
 class Game {
 public:
     static constexpr int minimumSize = 3;
-    static constexpr int maximumSize = 8;
+    static constexpr int maximumSize = 5;
     static constexpr int maximumHistory = 32;
     static constexpr int winningValue = 2048;
+    static constexpr int powerCount = 3;
+    static constexpr int maximumCharges = 2;
+
+    /** @brief Charges of @p power a fresh Standard game starts with: 2 Undo, 1 Swap, 0 Delete. */
+    static constexpr int startingCharges(Power power) {
+        switch (power) {
+        case Power::Undo: return 2;
+        case Power::Swap: return 1;
+        case Power::Remove: return 0;
+        }
+        return 0;
+    }
+
+    /** @brief Tile value whose creation by a merge earns one charge of @p power: 128, 256, 512. */
+    static constexpr int rewardValue(Power power) {
+        switch (power) {
+        case Power::Undo: return 128;
+        case Power::Swap: return 256;
+        case Power::Remove: return 512;
+        }
+        return 0;
+    }
 
     /** @brief Start a fresh game with two spawned tiles. Throws for unsupported sizes. */
-    explicit Game(int size = 4, std::uint64_t seed = std::random_device{}());
+    explicit Game(int size = 4, Mode mode = Mode::PowerUps, std::uint64_t seed = std::random_device{}());
 
     int size() const { return size_; }
+    Mode mode() const { return mode_; }
     int score() const { return score_; }
     /** @brief Largest face value on the board. */
     int highest() const;
@@ -82,9 +113,19 @@ public:
     bool canMove(Direction direction) const;
     /** @brief Slide tiles; returns false and changes nothing when no tile could move. */
     bool move(Direction direction);
-    /** @brief Restore the previous snapshot; returns false without history. */
+    /** @brief Restore the previous snapshot; returns false without history or Undo charge. */
     bool undo();
-    bool canUndo() const { return !history_.empty(); }
+    bool canUndo() const { return !history_.empty() && charges_[static_cast<int>(Power::Undo)] > 0; }
+    /** @brief Remaining charges of @p power. */
+    int charges(Power power) const;
+    /** @brief Whether the tiles in cells @p first and @p second may be exchanged. */
+    bool canSwap(int first, int second) const;
+    /** @brief Exchange two occupied, unequal tiles; returns false and changes nothing when not allowed. */
+    bool swap(int first, int second);
+    /** @brief Whether a tile with face value @p value exists and a Remove charge is available. */
+    bool canRemove(int value) const;
+    /** @brief Clear every tile with face value @p value; returns false and changes nothing when not allowed. */
+    bool remove(int value);
     /** @brief Mark the win as acknowledged so play continues past 2048. */
     void keepPlaying() { continued_ = true; }
     /** @brief Details of the last move() or the initial spawns, for animation. */
@@ -97,9 +138,12 @@ public:
 
     /** @brief Test hook: replace the board with face values (0 = empty) and clear history. */
     void setValues(const std::vector<int> &values, int score = 0);
+    /** @brief Test hook: set the charges of @p power, clamped to [0, maximumCharges]. */
+    void setCharges(Power power, int count);
 
 private:
     int size_;
+    Mode mode_;
     std::vector<Tile> cells_;
     std::vector<Snapshot> history_;
     Turn turn_;
@@ -109,9 +153,12 @@ private:
     int moves_ = 0;
     bool won_ = false;
     bool continued_ = false;
+    std::array<int, powerCount> charges_{};
 
     /** @brief Place a 2 (90%) or 4 in a random empty cell; returns its index or -1. */
     int spawn();
+    /** @brief Push the current state onto the undo history, dropping the oldest entry when full. */
+    void checkpoint();
     Snapshot snapshot() const;
 };
 

@@ -6,8 +6,9 @@
  * change only needs a repaint. Bars grow from a shared baseline with rounded
  * data ends; text uses the text and muted colors while marks carry the accent,
  * and won games carry the highlight with a legend so identity never rests on
- * color alone. Totals follow the size filter; move directions and spawns are
- * only kept across every size and say so.
+ * color alone. Standard and Classic games are kept apart and a switch picks
+ * which mode is shown. Totals follow the size filter; move directions and
+ * spawns are only kept across every size and say so.
  */
 #include "stats_view.h"
 #include "core/color.h"
@@ -280,16 +281,40 @@ void ScoreChart::leaveEvent(QEvent *event) {
     QWidget::leaveEvent(event);
 }
 
-StatsPanel::StatsPanel(const Stats &stats, const Game &game, QWidget *parent)
+StatsPanel::StatsPanel(const std::array<Stats, 2> &stats, const Game &game, QWidget *parent)
     : QWidget(parent), stats_(stats), game_(game) {
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(10);
-    auto *titles = new QVBoxLayout;
-    titles->setSpacing(2);
-    titles->addWidget(label("Statistics", "heading"));
+    auto *titles = titles_ = new QGridLayout;
+    titles->setHorizontalSpacing(12);
+    titles->setVerticalSpacing(2);
+    heading_ = label("Statistics", "heading");
+    titles->addWidget(heading_, 0, 0);
     subtitle_ = label({}, "muted");
-    titles->addWidget(subtitle_);
+    titles->addWidget(subtitle_, 1, 0, 1, 2);
+    auto *switcher = new QFrame;
+    modeSwitch_ = switcher;
+    switcher->setObjectName("tabBar");
+    auto *modeRow = new QHBoxLayout(switcher);
+    modeRow->setContentsMargins(3, 3, 3, 3);
+    modeRow->setSpacing(2);
+    modes_ = new QButtonGroup(this);
+    // Mode::PowerUps is always shown as "Standard".
+    for (const auto &[mode, name] : {std::pair{Mode::PowerUps, "Standard"}, std::pair{Mode::Classic, "Classic"}}) {
+        auto *button = new QPushButton(name);
+        button->setObjectName("mode");
+        button->setCheckable(true);
+        button->setCursor(Qt::PointingHandCursor);
+        button->setFocusPolicy(Qt::NoFocus);
+        button->setAccessibleName(QString("%1 mode statistics").arg(name));
+        modes_->addButton(button, static_cast<int>(mode));
+        modeRow->addWidget(button);
+    }
+    modes_->button(0)->setChecked(true);
+    connect(modes_, &QButtonGroup::idClicked, this, &StatsPanel::refresh);
+    titles->addWidget(switcher, 0, 1, Qt::AlignRight | Qt::AlignVCenter);
+    titles->setColumnStretch(0, 1);
     layout->addLayout(titles);
 
     auto *bar = new QFrame;
@@ -303,7 +328,7 @@ StatsPanel::StatsPanel(const Stats &stats, const Game &game, QWidget *parent)
     auto *chips = new QHBoxLayout;
     chips->setSpacing(4);
     filters_ = new QButtonGroup(this);
-    for (const int size : {0, 3, 4, 5, 6, 7, 8}) {
+    for (const int size : {0, 3, 4, 5}) {
         auto *chip = new QPushButton(size ? QString("%1×%1").arg(size) : QString("All"));
         chip->setObjectName("filter");
         chip->setCheckable(true);
@@ -394,7 +419,7 @@ StatsPanel::StatsPanel(const Stats &stats, const Game &game, QWidget *parent)
 
     auto *games = tab("Games");
     currentTitle_ = section(games, {});
-    auto *current = new QFrame;
+    auto *current = currentCard_ = new QFrame;
     current->setObjectName("statCard");
     auto *grid = new QGridLayout(current);
     grid->setContentsMargins(12, 9, 12, 10);
@@ -475,14 +500,26 @@ int StatsPanel::filter() const {
     return std::max(0, filters_->checkedId());
 }
 
+Mode StatsPanel::mode() const {
+    return static_cast<Mode>(std::max(0, modes_->checkedId()));
+}
+
+void StatsPanel::setMode(Mode mode) {
+    modes_->button(static_cast<int>(mode))->setChecked(true);
+    refresh();
+}
+
 void StatsPanel::refresh() {
     const int size = filter();
-    const auto totals = stats_.totals(size);
+    const auto &stats = stats_[static_cast<int>(mode())];
+    // The live game only shows under its own mode.
+    const bool live = game_.mode() == mode();
+    const auto totals = stats.totals(size);
     const bool any = totals.games > 0;
     const QString board = size ? QString("%1×%1 ").arg(size) : QString();
-    if (any && stats_.since())
+    if (any && stats.since())
         subtitle_->setText(QString("Since %1 · %2 %3")
-                               .arg(QLocale().toString(QDateTime::fromMSecsSinceEpoch(stats_.since()).date(), "d MMM yyyy"),
+                               .arg(QLocale().toString(QDateTime::fromMSecsSinceEpoch(stats.since()).date(), "d MMM yyyy"),
                                     number(totals.games), board + (totals.games == 1 ? "game" : "games")));
     else
         subtitle_->setText(QString("No %1games yet").arg(board));
@@ -496,7 +533,7 @@ void StatsPanel::refresh() {
         any ? number(std::llround(totals.averageScore())) : none,
         totals.bestTile ? number(totals.bestTile) : none,
         totals.fastestWin ? number(totals.fastestWin) : none,
-        QString("%1 / %2").arg(number(stats_.currentStreak()), number(stats_.bestStreak())),
+        QString("%1 / %2").arg(number(stats.currentStreak()), number(stats.bestStreak())),
         number(totals.moves),
         duration(totals.played),
         number(totals.merges),
@@ -515,15 +552,18 @@ void StatsPanel::refresh() {
     reached_->setRows(std::move(reached));
 
     std::vector<GameRecord> recent;
-    for (const auto &record : stats_.recent()) {
+    for (const auto &record : stats.recent()) {
         if (!size || record.size == size)
             recent.push_back(record);
     }
     chart_->setGames(std::move(recent));
-    chartEmpty_->setVisible(!chart_->count() && game_.moves());
-    chartEmpty_->setText("The current game joins the chart once you start a new one.");
+    chartEmpty_->setVisible(!chart_->count() && (!live || game_.moves()));
+    chartEmpty_->setText(live ? QString("The current game joins the chart once you start a new one.")
+                              : QString("No finished %1 games yet.").arg(mode() == Mode::Classic ? "Classic" : "Standard"));
 
-    const auto &record = stats_.current();
+    const auto &record = stats.current();
+    currentTitle_->setVisible(live);
+    currentCard_->setVisible(live);
     currentTitle_->setText(QString("CURRENT GAME · %1×%1%2").arg(game_.size())
                                .arg(game_.over() ? " · OVER" : game_.won() ? " · WON" : ""));
     const QStringList current{
@@ -537,7 +577,7 @@ void StatsPanel::refresh() {
     for (int index = 0; index < current.size(); ++index)
         current_[index]->setText(current[index]);
 
-    const auto &directions = stats_.directions();
+    const auto &directions = stats.directions();
     long long moves = 0;
     for (const auto count : directions)
         moves += count;
@@ -549,9 +589,9 @@ void StatsPanel::refresh() {
                         moves ? QString("%1 · %2").arg(number(directions[index]), percent(share)) : QString("0")});
     }
     directions_->setRows(std::move(rows));
-    const long long spawned = stats_.spawnedTwos() + stats_.spawnedFours();
+    const long long spawned = stats.spawnedTwos() + stats.spawnedFours();
     const QStringList facts{
-        spawned ? QString("%1 of %2").arg(percent(double(stats_.spawnedFours()) / spawned), number(spawned)) : none,
+        spawned ? QString("%1 of %2").arg(percent(double(stats.spawnedFours()) / spawned), number(spawned)) : none,
         any ? number(std::llround(double(totals.moves) / totals.games)) : none,
         totals.moves ? decimal(double(totals.merges) / totals.moves) : none,
         any ? duration(totals.played / totals.games) : none,
@@ -569,6 +609,17 @@ void StatsPanel::setTheme(const Theme &theme) {
 
 void StatsPanel::fit(int width, int height) {
     setFixedWidth(width);
+    // Beside the heading the switch needs its natural width; narrow cards give it a row of its own.
+    const bool stacked = width < heading_->sizeHint().width() + modeSwitch_->sizeHint().width() + 12;
+    if (stacked != stacked_) {
+        stacked_ = stacked;
+        titles_->removeWidget(modeSwitch_);
+        if (stacked)
+            titles_->addWidget(modeSwitch_, 3, 0, 1, 2);
+        else
+            titles_->addWidget(modeSwitch_, 0, 1, Qt::AlignRight | Qt::AlignVCenter);
+        titles_->setRowMinimumHeight(2, stacked ? 6 : 0);
+    }
     const int columns = width >= 360 ? 3 : 2;
     if (columns != columns_) {
         columns_ = columns;

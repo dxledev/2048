@@ -52,8 +52,9 @@ struct Totals {
 };
 
 /**
- * @brief Lifetime play statistics, persisted beside the session in stats.json.
+ * @brief Lifetime play statistics for one game mode, persisted beside the session.
  *
+ * Standard games are kept in stats.json and Classic games in stats-classic.json.
  * The window reports every successful move and undo together with the current
  * wall-clock time. Time between consecutive actions counts as play time, capped
  * at idleLimit so a board left open overnight adds at most a minute.
@@ -65,6 +66,8 @@ public:
 
     /** @brief Finish the live record (kept only if it has moves) and start one for @p game. */
     void begin(const Game &game, qint64 now);
+    /** @brief Finish the live record (kept only if it has moves) and leave an empty one; for a game in another mode. */
+    void finish();
     /** @brief Keep the live record if it describes @p game (same size and moves), else begin(). */
     void attach(const Game &game, qint64 now);
     /** @brief Account for a successful move; @p game is the state after it. */

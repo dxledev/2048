@@ -110,7 +110,7 @@ private slots:
         QFETCH(QList<int>, expected);
         QFETCH(int, gained);
         const auto towards = static_cast<Direction>(direction);
-        Game game(4, 7);
+        Game game(4, Mode::PowerUps, 7);
         load(game, board(towards, 1, line), 100);
         QVERIFY(game.canMove(towards));
         QVERIFY(game.move(towards));
@@ -128,7 +128,7 @@ private slots:
     }
 
     void noOpMove() {
-        Game game(4, 3);
+        Game game(4, Mode::PowerUps, 3);
         load(game, {2, 4, 8, 16, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 5);
         const auto before = game.cells();
         QVERIFY(!game.canMove(Direction::Left));
@@ -162,7 +162,7 @@ private slots:
     }
 
     void spawning() {
-        Game game(4, 11);
+        Game game(4, Mode::PowerUps, 11);
         QCOMPARE(tileCount(game), 2);
         const auto &start = game.lastTurn();
         QVERIFY(start.motions.empty());
@@ -181,7 +181,7 @@ private slots:
         QCOMPARE(game.at(3).value, 2);
         QVERIFY(game.lastTurn().spawned != 3);
 
-        Game small(3, 12);
+        Game small(3, Mode::PowerUps, 12);
         load(small, {2, 4, 8, 16, 32, 64, 128, 0, 256});
         QVERIFY(small.move(Direction::Left));
         QCOMPARE(small.lastTurn().spawned, 8);
@@ -196,7 +196,7 @@ private slots:
     }
 
     void scoring() {
-        Game game(4, 5);
+        Game game(4, Mode::PowerUps, 5);
         load(game, {2, 2, 0, 0, 4, 4, 0, 0, 8, 8, 8, 0, 0, 0, 0, 0}, 10);
         QVERIFY(game.move(Direction::Left));
         QCOMPARE(game.lastTurn().gained, 4 + 8 + 16);
@@ -215,7 +215,7 @@ private slots:
     }
 
     void winning() {
-        Game game(4, 9);
+        Game game(4, Mode::PowerUps, 9);
         load(game, {1024, 1024, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
         QVERIFY(!game.won());
         QVERIFY(!game.winPending());
@@ -233,7 +233,7 @@ private slots:
         QVERIFY(game.won());
         QVERIFY(!game.winPending());
 
-        Game fresh(4, 9);
+        Game fresh(4, Mode::PowerUps, 9);
         load(fresh, {1024, 512, 256, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
         QVERIFY(!fresh.won());
         load(fresh, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4096});
@@ -244,7 +244,7 @@ private slots:
 
     void gameOver() {
         const QList<int> stuck = {2, 4, 2, 4, 4, 2, 4, 2, 2, 4, 2, 4, 4, 2, 4, 2};
-        Game game(4, 2);
+        Game game(4, Mode::PowerUps, 2);
         load(game, stuck);
         QVERIFY(game.over());
         for (auto direction : directions) {
@@ -276,14 +276,14 @@ private slots:
         load(game, gap);
         QVERIFY(!game.over());
 
-        Game small(3, 1);
+        Game small(3, Mode::PowerUps, 1);
         load(small, {2, 4, 2, 4, 2, 4, 2, 4, 2});
         QVERIFY(small.over());
     }
 
     void largestValues() {
         constexpr int top = 1 << 30;
-        Game game(4, 6);
+        Game game(4, Mode::PowerUps, 6);
         load(game, {top, top, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
         QVERIFY(!game.canMove(Direction::Left));
         QVERIFY(game.move(Direction::Right));
@@ -296,7 +296,7 @@ private slots:
     void randomPlayInvariants() {
         std::mt19937 random(8);
         for (int round = 0; round < 24; ++round) {
-            Game game(3 + round % 3, static_cast<std::uint64_t>(round));
+            Game game(3 + round % 3, Mode::PowerUps, static_cast<std::uint64_t>(round));
             while (true) {
                 const bool movable = std::any_of(std::begin(directions), std::end(directions),
                                                  [&](Direction direction) { return game.canMove(direction); });
@@ -329,7 +329,7 @@ private slots:
     }
 
     void motions() {
-        Game game(4, 17);
+        Game game(4, Mode::PowerUps, 17);
         load(game, {0, 0, 0, 0, 2, 0, 2, 4, 0, 0, 0, 0, 8, 0, 0, 0});
         const int first = game.at(1, 0).id, second = game.at(1, 2).id, third = game.at(1, 3).id, still = game.at(3, 0).id;
         QCOMPARE(std::set<int>({first, second, third, still}).size(), std::size_t(4));
@@ -351,7 +351,7 @@ private slots:
     }
 
     void undoing() {
-        Game game(4, 13);
+        Game game(4, Mode::PowerUps, 13);
         load(game, {1024, 1024, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 50);
         const auto before = game.cells();
         QVERIFY(!game.undo());
@@ -375,7 +375,7 @@ private slots:
     }
 
     void historyCap() {
-        Game game(5, 21);
+        Game game(5, Mode::PowerUps, 21);
         std::vector<std::vector<Tile>> boards{game.cells()};
         std::vector<int> scores{game.score()};
         std::mt19937 random(3);
@@ -388,8 +388,12 @@ private slots:
         QVERIFY(game.undo());
         QVERIFY(game.cells() == boards[total - 1]);
         int undone = 1;
-        while (game.undo())
+        while (true) {
+            game.setCharges(Power::Undo, Game::maximumCharges);
+            if (!game.undo())
+                break;
             ++undone;
+        }
         QCOMPARE(undone, Game::maximumHistory);
         QVERIFY(game.cells() == boards[total - Game::maximumHistory]);
         QCOMPARE(game.score(), scores[total - Game::maximumHistory]);
@@ -397,7 +401,7 @@ private slots:
     }
 
     void jsonRoundTrip() {
-        Game game(4, 23);
+        Game game(4, Mode::PowerUps, 23);
         std::mt19937 random(4);
         for (int step = 0; step < 40; ++step)
             QVERIFY(randomMove(game, random));
@@ -405,14 +409,16 @@ private slots:
         const auto data = game.toJson();
         auto keys = data.keys();
         keys.sort();
-        QCOMPARE(keys, QStringList({"continued", "history", "moves", "score", "size", "values", "version", "won"}));
+        QCOMPARE(keys, QStringList({"charges", "continued", "history", "mode", "moves", "score", "size", "values", "version", "won"}));
+        QCOMPARE(data.value("mode").toString(), QString("powerups"));
+        QCOMPARE(data.value("charges").toArray(), QJsonArray({2, 1, 0}));
         QCOMPARE(data.value("version").toInt(), 1);
         QCOMPARE(data.value("size").toInt(), 4);
         QCOMPARE(data.value("values").toArray().size(), qsizetype(16));
         QCOMPARE(data.value("history").toArray().size(), qsizetype(Game::maximumHistory));
         keys = data.value("history").toArray().first().toObject().keys();
         keys.sort();
-        QCOMPARE(keys, QStringList({"score", "values", "won"}));
+        QCOMPARE(keys, QStringList({"charges", "score", "values", "won"}));
 
         const auto text = QJsonDocument(data).toJson(QJsonDocument::Compact);
         auto restored = Game::fromJson(QJsonDocument::fromJson(text).object(), 99);
@@ -426,7 +432,11 @@ private slots:
         QCOMPARE(restored.lastTurn().spawned, -1);
         QVERIFY(uniqueIds(restored));
         int depth = 0;
-        while (restored.undo()) {
+        while (true) {
+            restored.setCharges(Power::Undo, Game::maximumCharges);
+            game.setCharges(Power::Undo, Game::maximumCharges);
+            if (!restored.undo())
+                break;
             QVERIFY(game.undo());
             QCOMPARE(valuesOf(restored), valuesOf(game));
             QCOMPARE(restored.score(), game.score());
@@ -441,7 +451,7 @@ private slots:
 
     void jsonRejects_data() {
         QTest::addColumn<QJsonObject>("data");
-        Game game(4, 31);
+        Game game(4, Mode::PowerUps, 31);
         load(game, {2, 2, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8}, 12);
         game.move(Direction::Left);
         const auto valid = game.toJson();
@@ -479,7 +489,23 @@ private slots:
         QTest::newRow("text version") << with("version", "1");
         QTest::newRow("no version") << without("version");
         QTest::newRow("size 2") << with("size", 2);
+        QTest::newRow("size 6") << with("size", 6);
         QTest::newRow("size 9") << with("size", 9);
+        QTest::newRow("mode number") << with("mode", 1);
+        QTest::newRow("mode unknown") << with("mode", "sprint");
+        QTest::newRow("mode null") << with("mode", QJsonValue::Null);
+        QTest::newRow("charges object") << with("charges", QJsonObject{});
+        QTest::newRow("charges number") << with("charges", 2);
+        QTest::newRow("charges short") << with("charges", QJsonArray{2, 2});
+        QTest::newRow("charges long") << with("charges", QJsonArray{2, 2, 2, 2});
+        QTest::newRow("charges too high") << with("charges", QJsonArray{3, 2, 2});
+        QTest::newRow("charges negative") << with("charges", QJsonArray{-1, 2, 2});
+        QTest::newRow("charges fractional") << with("charges", QJsonArray{1.5, 2, 2});
+        QTest::newRow("charges text") << with("charges", QJsonArray{"2", 2, 2});
+        QTest::newRow("charges null") << with("charges", QJsonArray{QJsonValue::Null, 2, 2});
+        QTest::newRow("history charges too high") << withEntry("charges", QJsonArray{2, 2, 3});
+        QTest::newRow("history charges short") << withEntry("charges", QJsonArray{2});
+        QTest::newRow("classic with history") << with("mode", "classic");
         QTest::newRow("size mismatch") << with("size", 3);
         QTest::newRow("fractional size") << with("size", 4.5);
         QTest::newRow("short values") << with("values", shortValues);
@@ -516,19 +542,20 @@ private slots:
     }
 
     void construction() {
-        QVERIFY_THROWS_EXCEPTION(std::invalid_argument, Game(2, 1));
-        QVERIFY_THROWS_EXCEPTION(std::invalid_argument, Game(9, 1));
-        QVERIFY_THROWS_EXCEPTION(std::invalid_argument, Game(0, 1));
-        QVERIFY_THROWS_EXCEPTION(std::invalid_argument, Game(-4, 1));
+        QVERIFY_THROWS_EXCEPTION(std::invalid_argument, Game(2, Mode::PowerUps, 1));
+        QVERIFY_THROWS_EXCEPTION(std::invalid_argument, Game(6, Mode::PowerUps, 1));
+        QVERIFY_THROWS_EXCEPTION(std::invalid_argument, Game(9, Mode::PowerUps, 1));
+        QVERIFY_THROWS_EXCEPTION(std::invalid_argument, Game(0, Mode::PowerUps, 1));
+        QVERIFY_THROWS_EXCEPTION(std::invalid_argument, Game(-4, Mode::PowerUps, 1));
         for (int size = Game::minimumSize; size <= Game::maximumSize; ++size) {
-            Game game(size, static_cast<std::uint64_t>(size));
+            Game game(size, Mode::PowerUps, static_cast<std::uint64_t>(size));
             QCOMPARE(game.size(), size);
             QCOMPARE(static_cast<int>(game.cells().size()), size * size);
             QCOMPARE(tileCount(game), 2);
             QVERIFY(uniqueIds(game));
         }
 
-        Game game(4, 77), twin(4, 77);
+        Game game(4, Mode::PowerUps, 77), twin(4, Mode::PowerUps, 77);
         QVERIFY(game.cells() == twin.cells());
         std::mt19937 first(5), second(5);
         for (int step = 0; step < 20; ++step) {
@@ -546,11 +573,279 @@ private slots:
         QVERIFY(game.cells() == before);
     }
 
+    void startingCharges() {
+        Game game(4, Mode::PowerUps, 63);
+        QCOMPARE(Game::powerCount, 3);
+        QCOMPARE(Game::startingCharges(Power::Undo), 2);
+        QCOMPARE(Game::startingCharges(Power::Swap), 1);
+        QCOMPARE(Game::startingCharges(Power::Remove), 0);
+        QCOMPARE(Game::maximumCharges, 2);
+        QCOMPARE(Game::maximumSize, 5);
+        QCOMPARE(Game::rewardValue(Power::Undo), 128);
+        QCOMPARE(Game::rewardValue(Power::Swap), 256);
+        QCOMPARE(Game::rewardValue(Power::Remove), 512);
+        QVERIFY(game.mode() == Mode::PowerUps);
+        for (auto power : {Power::Undo, Power::Swap, Power::Remove})
+            QCOMPARE(game.charges(power), Game::startingCharges(power));
+        QVERIFY(!game.canUndo());
+        QVERIFY(!game.undo());
+
+        game.setCharges(Power::Swap, 1);
+        load(game, {2, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+        QCOMPARE(game.charges(Power::Swap), 1);
+        game.setCharges(Power::Undo, 7);
+        QCOMPARE(game.charges(Power::Undo), Game::maximumCharges);
+        game.setCharges(Power::Undo, -3);
+        QCOMPARE(game.charges(Power::Undo), 0);
+    }
+
+    void undoCharges() {
+        Game game(4, Mode::PowerUps, 41);
+        load(game, {2, 0, 0, 0, 4, 0, 0, 0, 8, 0, 0, 0, 16, 0, 0, 0});
+        QVERIFY(game.move(Direction::Right));
+        QVERIFY(game.move(Direction::Left));
+        QVERIFY(game.move(Direction::Right));
+        QVERIFY(game.undo());
+        QCOMPARE(game.charges(Power::Undo), 1);
+        const auto before = game.cells();
+        QVERIFY(game.undo());
+        QCOMPARE(game.charges(Power::Undo), 0);
+        QVERIFY(!game.canUndo());
+        QVERIFY(!game.undo());
+        QVERIFY(game.cells() != before);
+        QCOMPARE(game.moves(), 3);
+    }
+
+    void undoNeedsCharge() {
+        Game game(4, Mode::PowerUps, 47);
+        load(game, {2, 0, 0, 0, 4, 0, 0, 0, 8, 0, 0, 0, 16, 0, 0, 0});
+        QVERIFY(game.move(Direction::Right));
+        const auto after = game.cells();
+        QVERIFY(game.canUndo());
+        game.setCharges(Power::Undo, 0);
+        QVERIFY(!game.canUndo());
+        QVERIFY(!game.undo());
+        QVERIFY(game.cells() == after);
+        QCOMPARE(game.moves(), 1);
+    }
+
+    void undoRevokesEarned() {
+        Game game(4, Mode::PowerUps, 49);
+        game.setCharges(Power::Undo, 1);
+        load(game, {64, 64, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+        QVERIFY(game.move(Direction::Left));
+        QCOMPARE(game.lastTurn().earned[0], 1);
+        QCOMPARE(game.charges(Power::Undo), 2);
+        QVERIFY(game.undo());
+        QCOMPARE(game.charges(Power::Undo), 0);
+        QCOMPARE(game.lastTurn().earned[0], 0);
+        QVERIFY(!game.canUndo());
+    }
+
+    void rewardsEarned() {
+        struct Case {
+            Power power;
+            int value;
+        };
+        for (const auto &entry : {Case{Power::Undo, 128}, Case{Power::Swap, 256}, Case{Power::Remove, 512}}) {
+            const int index = static_cast<int>(entry.power);
+            Game game(4, Mode::PowerUps, 50 + index);
+            game.setCharges(entry.power, 1);
+            QList<int> row(16, 0);
+            row[0] = row[1] = entry.value / 2;
+            load(game, row);
+            QVERIFY(game.move(Direction::Left));
+            QCOMPARE(game.charges(entry.power), 2);
+            for (int other = 0; other < Game::powerCount; ++other)
+                QCOMPARE(game.lastTurn().earned[other], other == index ? 1 : 0);
+        }
+    }
+
+    void earningCapped() {
+        Game game(4, Mode::PowerUps, 51);
+        load(game, {64, 64, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+        QVERIFY(game.move(Direction::Left));
+        QCOMPARE(game.charges(Power::Undo), 2);
+        QCOMPARE(game.lastTurn().earned[0], 0);
+
+        game.setCharges(Power::Undo, 1);
+        load(game, {64, 64, 64, 64, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+        QVERIFY(game.move(Direction::Left));
+        QCOMPARE(game.charges(Power::Undo), 2);
+        QCOMPARE(game.lastTurn().earned[0], 1);
+    }
+
+    void swapRules() {
+        Game game(4, Mode::PowerUps, 53);
+        load(game, {2, 2, 0, 4, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+        QVERIFY(!game.canSwap(0, 0));
+        QVERIFY(!game.canSwap(0, 1));
+        QVERIFY(!game.canSwap(0, 2));
+        QVERIFY(!game.canSwap(2, 5));
+        QVERIFY(!game.canSwap(-1, 3));
+        QVERIFY(!game.canSwap(3, 16));
+        QVERIFY(game.canSwap(1, 3));
+        QVERIFY(!game.swap(0, 1));
+        QVERIFY(!game.canUndo());
+
+        game.setCharges(Power::Swap, 0);
+        QVERIFY(!game.canSwap(1, 3));
+        QVERIFY(!game.swap(1, 3));
+    }
+
+    void swapTiles() {
+        Game game(4, Mode::PowerUps, 55);
+        load(game, {2, 4, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 10);
+        const auto before = game.cells();
+        QVERIFY(game.swap(0, 3));
+        QCOMPARE(game.at(0).value, 8);
+        QCOMPARE(game.at(3).value, 2);
+        QCOMPARE(game.at(0).id, before[3].id);
+        QCOMPARE(game.at(3).id, before[0].id);
+        QCOMPARE(game.at(1).id, before[1].id);
+        QCOMPARE(game.score(), 10);
+        QCOMPARE(game.moves(), 0);
+        QCOMPARE(game.charges(Power::Swap), 0);
+        QCOMPARE(game.lastTurn().spawned, -1);
+        QCOMPARE(game.lastTurn().motions.size(), std::size_t(3));
+        QCOMPARE(describe(game.lastTurn().motions, before[0].id), QString("2 0->3"));
+        QCOMPARE(describe(game.lastTurn().motions, before[3].id), QString("8 3->0"));
+        QCOMPARE(describe(game.lastTurn().motions, before[1].id), QString("4 1->1"));
+        QVERIFY(uniqueIds(game));
+        QVERIFY(game.canUndo());
+
+        QVERIFY(game.undo());
+        QVERIFY(game.cells() == before);
+        QCOMPARE(game.charges(Power::Swap), 0);
+        QCOMPARE(game.charges(Power::Undo), 1);
+    }
+
+    void removeRules() {
+        Game game(4, Mode::PowerUps, 57);
+        game.setCharges(Power::Remove, 1);
+        load(game, {512, 512, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+        QVERIFY(!game.canRemove(0));
+        QVERIFY(!game.canRemove(4));
+        QVERIFY(game.canRemove(512));
+        QVERIFY(!game.remove(256));
+        game.setCharges(Power::Remove, 0);
+        QVERIFY(!game.canRemove(512));
+        QVERIFY(!game.remove(512));
+    }
+
+    void removeTiles() {
+        Game game(4, Mode::PowerUps, 59);
+        game.setCharges(Power::Remove, 2);
+        load(game, {512, 2, 512, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 30);
+        const auto before = game.cells();
+        QVERIFY(game.remove(512));
+        QList<int> expected(16, 0);
+        expected[1] = 2;
+        expected[3] = 4;
+        QCOMPARE(valuesOf(game), expected);
+        QCOMPARE(game.lastTurn().spawned, -1);
+        QCOMPARE(game.lastTurn().motions.size(), std::size_t(2));
+        QCOMPARE(describe(game.lastTurn().motions, before[1].id), QString("2 1->1"));
+        QCOMPARE(describe(game.lastTurn().motions, before[3].id), QString("4 3->3"));
+        QCOMPARE(game.score(), 30);
+        QCOMPARE(game.moves(), 0);
+        QCOMPARE(game.charges(Power::Remove), 1);
+        QVERIFY(uniqueIds(game));
+
+        QVERIFY(game.undo());
+        QVERIFY(game.cells() == before);
+        QCOMPARE(game.charges(Power::Remove), 1);
+    }
+
+    void removeEmptiesBoard() {
+        Game game(4, Mode::PowerUps, 61);
+        game.setCharges(Power::Remove, 1);
+        load(game, {512, 512, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 0);
+        QVERIFY(game.remove(512));
+        QCOMPARE(tileCount(game), 1);
+        const int spawned = game.lastTurn().spawned;
+        QVERIFY(spawned >= 0);
+        QVERIFY(game.at(spawned).value == 2 || game.at(spawned).value == 4);
+        QVERIFY(game.lastTurn().motions.empty());
+        QCOMPARE(game.moves(), 0);
+        QCOMPARE(game.score(), 0);
+    }
+
+    void jsonCharges() {
+        Game game(4, Mode::PowerUps, 65);
+        load(game, {2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+        QVERIFY(game.move(Direction::Left));
+        game.setCharges(Power::Swap, 1);
+        game.setCharges(Power::Remove, 0);
+        const auto data = game.toJson();
+        QCOMPARE(data.value("charges").toArray(), QJsonArray({2, 1, 0}));
+        QCOMPARE(data.value("history").toArray().first().toObject().value("charges").toArray(), QJsonArray({2, 1, 0}));
+
+        auto restored = Game::fromJson(data, 3);
+        QCOMPARE(restored.charges(Power::Undo), 2);
+        QCOMPARE(restored.charges(Power::Swap), 1);
+        QCOMPARE(restored.charges(Power::Remove), 0);
+        QVERIFY(restored.undo());
+        QCOMPARE(restored.charges(Power::Undo), 1);
+        QCOMPARE(restored.charges(Power::Swap), 1);
+        QCOMPARE(restored.charges(Power::Remove), 0);
+
+        auto legacy = data;
+        legacy.remove("mode");
+        legacy.remove("charges");
+        auto history = legacy.value("history").toArray();
+        for (int index = 0; index < history.size(); ++index) {
+            auto entry = history[index].toObject();
+            entry.remove("charges");
+            history[index] = entry;
+        }
+        legacy.insert("history", history);
+        const auto old = Game::fromJson(legacy, 4);
+        QVERIFY(old.mode() == Mode::PowerUps);
+        for (auto power : {Power::Undo, Power::Swap, Power::Remove})
+            QCOMPARE(old.charges(power), Game::startingCharges(power));
+        QVERIFY(old.canUndo());
+    }
+
+    void classic() {
+        Game game(4, Mode::Classic, 67);
+        QVERIFY(game.mode() == Mode::Classic);
+        for (auto power : {Power::Undo, Power::Swap, Power::Remove})
+            QCOMPARE(game.charges(power), 0);
+        game.setCharges(Power::Undo, 2);
+        QCOMPARE(game.charges(Power::Undo), 0);
+
+        load(game, {64, 64, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+        QVERIFY(game.move(Direction::Left));
+        QCOMPARE(game.lastTurn().earned[0], 0);
+        QCOMPARE(game.charges(Power::Undo), 0);
+        QVERIFY(!game.canUndo());
+        QVERIFY(!game.undo());
+        QVERIFY(!game.canSwap(0, 1));
+        QVERIFY(!game.canRemove(128));
+        QVERIFY(game.toJson().value("history").toArray().isEmpty());
+
+        std::mt19937 random(6);
+        for (int step = 0; step < 10; ++step)
+            QVERIFY(randomMove(game, random));
+        const auto data = game.toJson();
+        QCOMPARE(data.value("mode").toString(), QString("classic"));
+        QCOMPARE(data.value("charges").toArray(), QJsonArray({0, 0, 0}));
+        QVERIFY(data.value("history").toArray().isEmpty());
+        const auto restored = Game::fromJson(data, 3);
+        QVERIFY(restored.mode() == Mode::Classic);
+        QCOMPARE(restored.toJson(), data);
+
+        auto stored = data;
+        stored.insert("charges", QJsonArray{2, 2, 2});
+        QVERIFY_THROWS_EXCEPTION(std::runtime_error, Game::fromJson(stored, 1));
+    }
+
     void spawnDistribution() {
         int fours = 0, total = 0;
         std::array<int, 16> positions{};
         for (std::uint64_t seed = 0; seed < 2000; ++seed) {
-            const Game game(4, seed);
+            const Game game(4, Mode::PowerUps, seed);
             for (int index = 0; index < 16; ++index) {
                 const int value = game.at(index).value;
                 if (value) {

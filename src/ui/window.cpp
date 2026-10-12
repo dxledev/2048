@@ -27,6 +27,7 @@
 #include <QStyle>
 #include <QVBoxLayout>
 #include <algorithm>
+#include <array>
 
 namespace g2048 {
 
@@ -68,6 +69,39 @@ QString number(int value) {
 
 qint64 now() {
     return QDateTime::currentMSecsSinceEpoch();
+}
+
+/** @brief Statistics file of @p mode; Standard keeps the name used before modes existed. */
+QString statsPath(const QString &directory, Mode mode) {
+    return directory + (mode == Mode::Classic ? "/stats-classic.json" : "/stats.json");
+}
+
+/** @brief Display name of a power-up. */
+QString powerName(Power power) {
+    return std::array{"Undo", "Swap two tiles", "Delete tiles by number"}[static_cast<int>(power)];
+}
+
+/** @brief Keyboard shortcut of a power-up. */
+QString powerKey(Power power) {
+    return std::array{"U", "X", "R"}[static_cast<int>(power)];
+}
+
+/** @brief Noun for @p power in "No ___ left". */
+QString powerNoun(Power power) {
+    return std::array{"undos", "swaps", "deletes"}[static_cast<int>(power)];
+}
+
+/** @brief Three-line hover text: title and shortcut, how to earn more, and remaining uses. */
+QString powerTip(Power power, const Game &game) {
+    const int left = game.charges(power), reward = Game::rewardValue(power);
+    auto earn = left >= Game::maximumCharges ? QString("Full. Spend one, then make a %1 tile to earn +1.").arg(reward)
+                                             : QString("Make a %1 tile to earn +1.").arg(reward);
+    if (power == Power::Undo && left > 0 && !game.canUndo())
+        earn.prepend("Nothing to undo yet. ");
+    return QString("%1 · %2\n%3\n%4 of %5 uses left")
+        .arg(powerName(power), powerKey(power), earn)
+        .arg(left)
+        .arg(Game::maximumCharges);
 }
 
 QPixmap glyphPixmap(Glyph glyph, const QColor &color, int size, qreal ratio) {
@@ -120,7 +154,7 @@ Window::Window(QString configDirectory, Theme theme, int size, bool translucent,
     const QString session = configDirectory_ + "/game.json";
     if (QFileInfo::exists(session)) {
         try {
-            BestScores best;
+            ModeBests best;
             auto restored = loadSession(session, best);
             best_ = std::move(best);
             if (!size || restored.size() == size) {
@@ -131,16 +165,20 @@ Window::Window(QString configDirectory, Theme theme, int size, bool translucent,
             message("Saved game could not be restored: " + QString::fromUtf8(error.what()));
         }
     }
-    best_[game_.size()] = std::max(best_.value(game_.size()), game_.score());
-    const QString statistics = configDirectory_ + "/stats.json";
-    if (QFileInfo::exists(statistics)) {
+    raiseBest();
+    for (const auto mode : {Mode::PowerUps, Mode::Classic}) {
+        const QString statistics = statsPath(configDirectory_, mode);
+        if (!QFileInfo::exists(statistics))
+            continue;
         try {
-            stats_ = loadStats(statistics);
+            stats_[static_cast<int>(mode)] = loadStats(statistics);
         } catch (const std::exception &error) {
             message("Statistics could not be restored: " + QString::fromUtf8(error.what()));
         }
     }
-    stats_.attach(game_, now());
+    // Only the live game's mode has a live record; a stray one in the other mode is finished.
+    stats_[static_cast<int>(game_.mode() == Mode::Classic ? Mode::PowerUps : Mode::Classic)].finish();
+    liveStats().attach(game_, now());
     board_->setGame(&game_);
     board_->animate();
     refresh();
@@ -161,17 +199,34 @@ void Window::buildInterface() {
     layout->setContentsMargins(24, 20, 24, 16);
     layout->setSpacing(14);
     header_ = buildHeader();
-    toolbar_ = buildToolbar();
+    scoreRow_ = buildScoreRow();
     footer_ = buildFooter();
     board_ = new Board;
+    powerBar_ = new PowerBar;
     connect(board_, &Board::swiped, this, &Window::move);
+    connect(board_, &Board::picked, this, &Window::pickCell);
+    connect(powerBar_, &PowerBar::activated, this, [this](Power power) {
+        if (power == Power::Undo)
+            undo();
+        else
+            armPower(power);
+    });
     connect(board_, &Board::winRevealed, this, [this] {
         if (resultScheduled_)
             QTimer::singleShot(120, this, &Window::showScheduledResult);
     });
     layout->addWidget(header_);
-    layout->addWidget(toolbar_);
-    layout->addWidget(board_, 1);
+    layout->addWidget(scoreRow_);
+    // Board and tray: a column normally, a row once fitColumn() moves the tray beside the board.
+    stage_ = new QWidget;
+    middle_ = new QBoxLayout(QBoxLayout::TopToBottom, stage_);
+    middle_->setContentsMargins(0, 0, 0, 0);
+    middle_->setSpacing(layout->spacing());
+    balance_ = new QSpacerItem(0, 0, QSizePolicy::Fixed, QSizePolicy::Minimum);
+    middle_->addSpacerItem(balance_);
+    middle_->addWidget(board_, 1);
+    middle_->addWidget(powerBar_, 0, Qt::AlignCenter);
+    layout->addWidget(stage_, 1, Qt::AlignHCenter);
     layout->addWidget(footer_);
     buildNewGameModal();
     buildResultModal();
@@ -180,8 +235,13 @@ void Window::buildInterface() {
 
 QWidget *Window::buildHeader() {
     auto *header = new QWidget;
-    auto *row = new QHBoxLayout(header);
-    row->setContentsMargins(0, 0, 0, 0);
+    // Equal side columns keep the middle one, which holds the score cards in a wide window, centered.
+    headerGrid_ = new QGridLayout(header);
+    headerGrid_->setContentsMargins(0, 0, 0, 0);
+    headerGrid_->setHorizontalSpacing(12);
+    headerGrid_->setColumnStretch(0, 1);
+    headerGrid_->setColumnStretch(2, 1);
+    auto *row = new QHBoxLayout;
     row->setSpacing(12);
     brand_ = label({}, "brand");
     brand_->setFixedSize(38, 38);
@@ -191,7 +251,28 @@ QWidget *Window::buildHeader() {
     titles->addWidget(label("2048", "wordmark"));
     titles->addWidget(label("Join the tiles, reach 2048", "muted"));
     row->addLayout(titles);
-    row->addStretch();
+    headerGrid_->addLayout(row, 0, 0, Qt::AlignLeft | Qt::AlignVCenter);
+    statsButton_ = button("Stats", "tool", "Statistics · T");
+    connect(statsButton_, &QPushButton::clicked, this, &Window::showStats);
+    newButton_ = button("New game", "primary", "New game · N");
+    connect(newButton_, &QPushButton::clicked, this, &Window::requestNewGame);
+    auto *actions = new QHBoxLayout;
+    actions->setSpacing(8);
+    actions->addWidget(statsButton_);
+    actions->addWidget(newButton_);
+    headerGrid_->addLayout(actions, 0, 2, Qt::AlignRight | Qt::AlignVCenter);
+    return header;
+}
+
+QWidget *Window::buildScoreRow() {
+    auto *scores = new QWidget;
+    auto *row = new QHBoxLayout(scores);
+    row->setContentsMargins(0, 0, 0, 0);
+    row->setSpacing(12);
+    status_ = label({}, "status");
+    status_->setMinimumWidth(40);
+    status_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    row->addWidget(status_, 1);
     const auto card = [](const QString &title, QLabel *&value, QLabel *extra) {
         auto *frame = new QFrame;
         frame->setObjectName("scoreCard");
@@ -213,38 +294,26 @@ QWidget *Window::buildHeader() {
         return frame;
     };
     gain_ = label({}, "gain");
-    row->addWidget(card("SCORE", score_, gain_));
-    row->addWidget(card("BEST", bestScore_, nullptr));
-    return header;
-}
-
-QWidget *Window::buildToolbar() {
-    auto *toolbar = new QWidget;
-    auto *row = new QHBoxLayout(toolbar);
-    row->setContentsMargins(0, 0, 0, 0);
-    row->setSpacing(8);
-    status_ = label({}, "status");
-    status_->setMinimumWidth(40);
-    status_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    row->addWidget(status_, 1);
-    statsButton_ = button("Stats", "tool", "Statistics · T");
-    undoButton_ = button("Undo", "tool", "Undo · U");
-    connect(statsButton_, &QPushButton::clicked, this, &Window::showStats);
-    newButton_ = button("New game", "primary", "New game · N");
-    connect(undoButton_, &QPushButton::clicked, this, &Window::undo);
-    connect(newButton_, &QPushButton::clicked, this, &Window::requestNewGame);
-    row->addWidget(statsButton_);
-    row->addWidget(undoButton_);
-    row->addWidget(newButton_);
-    return toolbar;
+    // The cards sit after the status here, or in the header's middle once fitColumn() moves them.
+    scores_ = new QWidget;
+    auto *cards = new QHBoxLayout(scores_);
+    cards->setContentsMargins(0, 0, 0, 0);
+    cards->setSpacing(12);
+    cards->addWidget(card("SCORE", score_, gain_));
+    cards->addWidget(card("BEST", bestScore_, nullptr));
+    row->addWidget(scores_);
+    return scores;
 }
 
 QWidget *Window::buildFooter() {
     auto *footer = new QWidget;
     auto *row = new QHBoxLayout(footer);
     row->setContentsMargins(2, 0, 2, 0);
-    row->addWidget(label("Arrows, WASD, or HJKL to slide · swipe works too", "hint"));
-    row->addStretch();
+    row->setSpacing(12);
+    hint_ = label({}, "hint");
+    // The hint gives way to the theme name instead of widening the column.
+    hint_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    row->addWidget(hint_, 1);
     themeName_ = label({}, "hint");
     row->addWidget(themeName_);
     return footer;
@@ -262,13 +331,34 @@ void Window::buildNewGameModal() {
     auto *chips = new QHBoxLayout;
     chips->setSpacing(6);
     sizes_ = new QButtonGroup(newGame_);
-    for (const int size : {3, 4, 5, 6, 7, 8}) {
+    for (const int size : {3, 4, 5}) {
         auto *chip = button(QString("%1×%1").arg(size), "chip", QString("%1 by %1 board").arg(size));
         chip->setCheckable(true);
         sizes_->addButton(chip, size);
         chips->addWidget(chip);
     }
     body->addLayout(chips);
+    body->addWidget(label("MODE", "eyebrow"));
+    auto *modeChips = new QHBoxLayout;
+    modeChips->setSpacing(6);
+    modes_ = new QButtonGroup(newGame_);
+    // Mode::PowerUps is always shown as "Standard".
+    for (const auto &[mode, name] : {std::pair{Mode::PowerUps, "Standard"}, std::pair{Mode::Classic, "Classic"}}) {
+        auto *chip = button(name, "chip", QString("%1 mode").arg(name));
+        chip->setCheckable(true);
+        modes_->addButton(chip, static_cast<int>(mode));
+        modeChips->addWidget(chip);
+    }
+    body->addLayout(modeChips);
+    modeHint_ = label({}, "muted");
+    modeHint_->setWordWrap(true);
+    body->addWidget(modeHint_);
+    const auto describe = [this] {
+        modeHint_->setText(modes_->checkedId() == static_cast<int>(Mode::Classic)
+            ? "The original game. No power-ups, no undo."
+            : "Undo, swap, and delete power-ups. Big tiles earn more uses.");
+    };
+    connect(modes_, &QButtonGroup::idClicked, this, describe);
     body->addSpacing(4);
     auto *actions = new QHBoxLayout;
     actions->addStretch();
@@ -277,8 +367,9 @@ void Window::buildNewGameModal() {
     connect(cancel, &QPushButton::clicked, newGame_, &Modal::dismiss);
     const auto begin = [this] {
         const int size = sizes_->checkedId() > 0 ? sizes_->checkedId() : game_.size();
+        const Mode mode = modes_->checkedId() >= 0 ? static_cast<Mode>(modes_->checkedId()) : game_.mode();
         newGame_->dismiss();
-        startNewGame(size);
+        startNewGame(size, mode);
     };
     connect(start, &QPushButton::clicked, this, begin);
     connect(newGame_, &Modal::accepted, this, begin);
@@ -308,7 +399,8 @@ void Window::buildResultModal() {
     actions->addWidget(resultSecondary_);
     actions->addWidget(resultPrimary_);
     body->addLayout(actions);
-    // Win: primary keeps playing, secondary starts over. Loss: primary starts over, secondary undoes.
+    // Win: primary keeps playing, secondary starts over. Loss: primary starts over, secondary undoes
+    // or, with no undo left, just closes so a swap or delete can be used.
     // Only "Keep going" ends a pending win; any other way out leaves the board marked won.
     connect(resultPrimary_, &QPushButton::clicked, this, [this] {
         if (resultIsWin_) {
@@ -320,7 +412,7 @@ void Window::buildResultModal() {
             result_->dismiss();
         } else {
             result_->dismiss();
-            startNewGame(game_.size());
+            startNewGame(game_.size(), game_.mode());
         }
     });
     connect(resultSecondary_, &QPushButton::clicked, this, [this] {
@@ -328,7 +420,7 @@ void Window::buildResultModal() {
         result_->dismiss();
         if (win)
             requestNewGame();
-        else
+        else if (game_.canUndo())
             undo();
     });
     connect(result_, &Modal::accepted, resultPrimary_, &QPushButton::click);
@@ -359,11 +451,17 @@ void Window::buildStatsModal() {
         }
         resetTimer_.stop();
         resetStats_->setText("Reset");
-        stats_.reset(game_, now());
+        // Only the shown mode is reset; its live record restarts only if the live game is in that mode.
+        const Mode shown = statsPanel_->mode();
+        auto &stats = stats_[static_cast<int>(shown)];
+        if (shown == game_.mode())
+            stats.reset(game_, now());
+        else
+            stats = Stats{};
         save();
         statsPanel_->refresh();
         fitStats();
-        message("Statistics reset");
+        message(QString("%1 statistics reset").arg(shown == Mode::Classic ? "Classic" : "Standard"));
     });
     connect(statsModal_, &Modal::dismissed, this, [this] {
         resetTimer_.stop();
@@ -401,6 +499,10 @@ void Window::applyTheme() {
                           background: transparent; color: @muted; }
         QPushButton#tab:hover { color: @text; }
         QPushButton#tab:checked { background: @surface; border-color: @border; color: @text; }
+        QPushButton#mode { padding: 5px 12px; border: 1px solid transparent; border-radius: 8px; font-size: 12px;
+                           background: transparent; color: @muted; }
+        QPushButton#mode:hover { color: @text; }
+        QPushButton#mode:checked { background: @surface; border-color: @border; color: @text; }
         QFrame#statCard { background: @surface_alt; border: 1px solid @border; border-radius: 12px; }
         QLabel#statValue { font-size: 18px; font-weight: 700; }
         QLabel#factValue { font-size: 15px; font-weight: 700; }
@@ -435,7 +537,6 @@ void Window::applyTheme() {
     const qreal ratio = devicePixelRatioF();
     const auto text = theme.color("text"), muted = theme.color("muted");
     statsButton_->setIcon(glyphIcon(Glyph::Chart, text, muted, ratio));
-    undoButton_->setIcon(glyphIcon(Glyph::Undo, text, muted, ratio));
     newButton_->setIcon(glyphIcon(Glyph::Restart, theme.color("accent_text"), muted, ratio));
     brand_->setPixmap(brandMark(theme, 38, ratio));
     setWindowIcon(applicationIcon(theme));
@@ -446,6 +547,7 @@ void Window::applyTheme() {
     }
     themeName_->setText("Theme · " + theme.name);
     board_->setTheme(theme);
+    powerBar_->setTheme(theme);
     for (auto *modal : {newGame_, result_, statsModal_})
         modal->setTheme(theme);
     statsPanel_->setTheme(theme);
@@ -464,6 +566,7 @@ QString Window::status() const {
 bool Window::move(Direction direction) {
     if (modalOpen())
         return false;
+    cancelPick();
     board_->finish();
     if (game_.winPending()) {
         // A won board stays put until the player chooses to keep going.
@@ -473,15 +576,26 @@ bool Window::move(Direction direction) {
     }
     if (!game_.move(direction))
         return false;
-    stats_.recordMove(game_, direction, now());
+    liveStats().recordMove(game_, direction, now());
     const int gained = game_.lastTurn().gained;
-    best_[game_.size()] = std::max(best_.value(game_.size()), game_.score());
+    raiseBest();
     if (gained) {
         gain_->setText("+" + number(gained));
         gainTimer_.start(650);
     }
     board_->animate();
     refresh();
+    QStringList earned, made;
+    for (int index = 0; index < Game::powerCount; ++index) {
+        const int count = game_.lastTurn().earned[index];
+        if (!count)
+            continue;
+        const auto power = static_cast<Power>(index);
+        earned.append(QString("+%1 %2").arg(count).arg(power == Power::Undo ? "Undo" : power == Power::Swap ? "Swap" : "Delete"));
+        made.append(QString("a %1").arg(Game::rewardValue(power)));
+    }
+    if (!earned.isEmpty())
+        message(QString("%1 · you made %2").arg(earned.join(", "), made.join(" and ")));
     saveTimer_.start();
     if (game_.winPending() || game_.over())
         scheduleResult();
@@ -491,47 +605,161 @@ bool Window::move(Direction direction) {
 void Window::undo() {
     if (modalOpen() && !result_->isVisible())
         return;
-    board_->finish();
-    if (!game_.undo()) {
-        message("Nothing to undo");
+    if (game_.mode() == Mode::Classic) {
+        message("Classic mode has no undo");
         return;
     }
-    stats_.recordUndo(game_, now());
+    cancelPick();
+    board_->finish();
+    if (!game_.undo()) {
+        message(game_.charges(Power::Undo) ? "Nothing to undo"
+                                           : QString("No undos left · make a %1 tile to earn one").arg(Game::rewardValue(Power::Undo)));
+        return;
+    }
+    liveStats().recordUndo(game_, now());
     resultScheduled_ = false;
     gain_->clear();
     refresh();
     saveTimer_.start();
 }
 
+void Window::armSwap() {
+    armPower(Power::Swap);
+}
+
+void Window::armRemove() {
+    armPower(Power::Remove);
+}
+
+void Window::armPower(Power power) {
+    if (modalOpen())
+        return;
+    if (game_.mode() == Mode::Classic) {
+        message("Classic mode has no power-ups");
+        return;
+    }
+    const auto pick = power == Power::Swap ? Board::Pick::Swap : Board::Pick::Remove;
+    if (board_->pick() == pick) {
+        cancelPick();
+        return;
+    }
+    board_->finish();
+    if (game_.winPending()) {
+        resultScheduled_ = false;
+        showResult(true);
+        return;
+    }
+    if (!game_.charges(power)) {
+        message(QString("No %1 left · make a %2 tile to earn one").arg(powerNoun(power)).arg(Game::rewardValue(power)));
+        return;
+    }
+    setPick(pick);
+}
+
+void Window::cancelPick() {
+    if (board_->pick() != Board::Pick::None)
+        setPick(Board::Pick::None);
+}
+
+void Window::setPick(Board::Pick pick) {
+    selected_ = -1;
+    board_->setPick(pick);
+    powerBar_->setArmed(pick == Board::Pick::None ? std::nullopt
+                        : std::optional(pick == Board::Pick::Swap ? Power::Swap : Power::Remove));
+    // Drop any transient message so the prompt (or the usual status) shows.
+    statusTimer_.stop();
+    status_->clear();
+    status_->setToolTip({});
+    refresh();
+}
+
+QString Window::prompt() const {
+    switch (board_->pick()) {
+    case Board::Pick::Swap:
+        return selected_ < 0 ? "Pick two tiles to swap · Esc cancels" : "Pick a second tile · Esc cancels";
+    case Board::Pick::Remove: return "Pick a number to delete · Esc cancels";
+    case Board::Pick::None: break;
+    }
+    return {};
+}
+
+void Window::pickCell(int index) {
+    if (modalOpen() || index < 0 || !game_.at(index).value)
+        return;
+    if (board_->pick() == Board::Pick::Remove) {
+        const int value = game_.at(index).value;
+        if (!game_.remove(value))
+            return;
+        finishPower();
+        message(QString("Removed every %1").arg(number(value)));
+        return;
+    }
+    if (selected_ < 0 || index == selected_) {
+        selected_ = index == selected_ ? -1 : index;
+        board_->setSelected(selected_);
+        statusTimer_.stop();
+        status_->clear();
+        refresh();
+        return;
+    }
+    if (!game_.swap(selected_, index)) {
+        message("Pick a tile with a different number");
+        return;
+    }
+    finishPower();
+    message("Swapped two tiles");
+}
+
+void Window::finishPower() {
+    board_->finish();
+    setPick(Board::Pick::None);
+    board_->animate();
+    refresh();
+    saveTimer_.start();
+    if (game_.winPending() || game_.over())
+        scheduleResult();
+}
+
 void Window::requestNewGame() {
     if (modalOpen())
         return;
+    cancelPick();
     if (auto *chip = sizes_->button(game_.size()))
         chip->setChecked(true);
+    if (auto *chip = modes_->button(static_cast<int>(game_.mode())))
+        chip->setChecked(true);
+    modeHint_->setText(game_.mode() == Mode::Classic ? "The original game. No power-ups, no undo."
+                                                     : "Undo, swap, and delete power-ups. Big tiles earn more uses.");
     newGameText_->setText(game_.moves() && !game_.over()
         ? QString("Your current score of %1 will be replaced by a fresh board.").arg(number(game_.score()))
-        : QString("Pick a board size. Bigger boards give you more room to build."));
+        : QString("Pick a board size and mode. Bigger boards give you more room to build."));
     newGame_->open();
 }
 
-void Window::startNewGame(int size) {
+void Window::startNewGame(int size, Mode mode) {
+    cancelPick();
     board_->finish();
-    game_ = Game(size);
-    stats_.begin(game_, now());
+    // The previous game is finished under its own mode, whichever mode comes next.
+    if (game_.mode() != mode)
+        liveStats().finish();
+    game_ = Game(size, mode);
+    liveStats().begin(game_, now());
     resultScheduled_ = false;
-    best_[size] = std::max(best_.value(size), 0);
+    raiseBest();
     board_->setGame(&game_);
     board_->animate();
     gain_->clear();
-    message(QString("New %1×%1 game").arg(size));
+    refresh();
+    message(QString("New %1×%1 game").arg(size) + (mode == Mode::Classic ? " · Classic" : ""));
     save();
 }
 
 void Window::showStats() {
     if (modalOpen())
         return;
+    cancelPick();
     board_->finish();
-    statsPanel_->refresh();
+    statsPanel_->setMode(game_.mode());
     fitStats();
     statsModal_->open();
 }
@@ -568,6 +796,7 @@ void Window::showScheduledResult() {
 }
 
 void Window::showResult(bool win) {
+    cancelPick();
     resultIsWin_ = win;
     const qreal ratio = devicePixelRatioF();
     resultGlyph_->setPixmap(glyphPixmap(win ? Glyph::Trophy : Glyph::Grid, watcher_->theme().color("accent"), 44, ratio));
@@ -585,9 +814,12 @@ void Window::showResult(bool win) {
                                  .arg(number(game_.score()), record ? " · a new best" : QString(" · best ") + number(best()))
                                  .arg(number(game_.highest())));
         resultPrimary_->setText("Try again");
-        resultSecondary_->setText("Undo move");
-        resultSecondary_->setEnabled(game_.canUndo());
+        // Undo if possible; otherwise a spare swap or delete may still free the board.
+        const bool spare = game_.charges(Power::Swap) || game_.charges(Power::Remove);
+        resultSecondary_->setText(game_.canUndo() || !spare ? "Undo move" : "Keep trying");
+        resultSecondary_->setEnabled(game_.canUndo() || spare);
     }
+    resultSecondary_->setVisible(win || game_.mode() == Mode::PowerUps);
     if (win)
         resultSecondary_->setEnabled(true);
     result_->open();
@@ -597,14 +829,38 @@ void Window::refresh() {
     board_->refreshWin();
     score_->setText(number(game_.score()));
     bestScore_->setText(number(best()));
-    undoButton_->setEnabled(game_.canUndo());
+    refreshPowers();
     if (status_->text().isEmpty() || !statusTimer_.isActive()) {
-        if (game_.over())
-            status_->setText("No moves left · undo or start again");
+        const bool spare = game_.charges(Power::Undo) || game_.charges(Power::Swap) || game_.charges(Power::Remove);
+        if (!prompt().isEmpty())
+            status_->setText(prompt());
+        else if (game_.over())
+            status_->setText(spare ? "No moves left · use a power-up or start again" : "No moves left · start again");
         else if (game_.won())
             status_->setText(QString("Highest tile %1").arg(number(game_.highest())));
         else
-            status_->setText(QString("%1×%1 · %2 moves").arg(game_.size()).arg(number(game_.moves())));
+            status_->setText(QString("%1×%1%2 · %3 moves").arg(game_.size())
+                                 .arg(game_.mode() == Mode::Classic ? " Classic" : "").arg(number(game_.moves())));
+    }
+}
+
+void Window::refreshPowers() {
+    const bool powers = game_.mode() == Mode::PowerUps;
+    if (powerBar_->isHidden() == powers) {
+        powerBar_->setVisible(powers);
+        fitColumn();
+    }
+    hint_->setText(powers ? "Arrows, WASD, or HJKL to slide · U undo · X swap · R delete"
+                          : "Arrows, WASD, or HJKL to slide · swipe works too");
+    for (int index = 0; index < Game::powerCount; ++index) {
+        const auto power = static_cast<Power>(index);
+        auto *item = powerBar_->button(power);
+        const auto tip = powerTip(power, game_);
+        item->setCharges(game_.charges(power), Game::maximumCharges);
+        item->setEnabled(power == Power::Undo ? game_.canUndo() : game_.charges(power) > 0);
+        item->setToolTip(tip);
+        item->setAccessibleName(powerName(power));
+        item->setAccessibleDescription(tip.section('\n', 1).replace('\n', ' '));
     }
 }
 
@@ -616,11 +872,17 @@ void Window::message(const QString &text) {
     statusTimer_.start(3200);
 }
 
+void Window::raiseBest() {
+    auto &best = best_[static_cast<int>(game_.mode())];
+    best[game_.size()] = std::max(best.value(game_.size()), game_.score());
+}
+
 void Window::save() {
     saveTimer_.stop();
     try {
         saveSession(configDirectory_ + "/game.json", game_, best_);
-        saveStats(configDirectory_ + "/stats.json", stats_);
+        for (const auto mode : {Mode::PowerUps, Mode::Classic})
+            saveStats(statsPath(configDirectory_, mode), stats_[static_cast<int>(mode)]);
     } catch (const std::exception &error) {
         message("Could not save: " + QString::fromUtf8(error.what()));
     }
@@ -641,6 +903,15 @@ void Window::keyPressEvent(QKeyEvent *event) {
         if (event->key() != Qt::Key_Z || control)
             undo();
         break;
+    case Qt::Key_X: if (!control) armSwap(); break;
+    case Qt::Key_R: case Qt::Key_Delete: if (!control) armRemove(); break;
+    case Qt::Key_Escape:
+        if (board_->pick() == Board::Pick::None) {
+            QMainWindow::keyPressEvent(event);
+            return;
+        }
+        cancelPick();
+        break;
     case Qt::Key_N: requestNewGame(); break;
     case Qt::Key_T: if (!control) showStats(); break;
     default: QMainWindow::keyPressEvent(event); return;
@@ -649,7 +920,7 @@ void Window::keyPressEvent(QKeyEvent *event) {
 }
 
 void Window::closeEvent(QCloseEvent *event) {
-    stats_.suspend();
+    liveStats().suspend();
     save();
     QMainWindow::closeEvent(event);
 }
@@ -657,23 +928,83 @@ void Window::closeEvent(QCloseEvent *event) {
 void Window::changeEvent(QEvent *event) {
     // Time spent in another window is not play time.
     if (event->type() == QEvent::ActivationChange && !isActiveWindow())
-        stats_.suspend();
+        liveStats().suspend();
     QMainWindow::changeEvent(event);
 }
 
 void Window::fitColumn() {
     const int spacing = content_->layout()->spacing();
-    const int chrome = header_->sizeHint().height() + toolbar_->sizeHint().height()
-        + footer_->sizeHint().height() + spacing * 3;
     const QSize area = surface_->size();
-    const int side = std::max(board_->minimumSizeHint().width(), std::min(area.width() - 40, area.height() - 32 - chrome));
-    // Collapse toolbar labels to icons when the column is narrow.
-    const bool compact = side < 380;
+    const bool powers = !powerBar_->isHidden();
+    const int titles = headerGrid_->itemAtPosition(0, 0)->sizeHint().height();
+    const int actions = headerGrid_->itemAtPosition(0, 2)->sizeHint().height();
+    const int cards = scores_->sizeHint().height();
+    const int status = std::max(status_->sizeHint().height(), status_->fontMetrics().height());
+    struct Plan {
+        int chrome, side = 0, extra = 0, below = 0, unit = 0;
+        bool sideTray = false;
+    };
+    // Lay the board out under the chrome height of either header arrangement.
+    const auto plan = [&](bool wide) {
+        Plan result;
+        result.chrome = (wide ? std::max({titles, actions, cards}) + status
+                              : std::max(titles, actions) + std::max(status, cards))
+            + footer_->sizeHint().height() + spacing * 3;
+        const int tall = area.height() - 32 - result.chrome; // Board side when nothing shares its column.
+        // Beside the board, the tray needs its own width plus a gap; take that only when the height is the limit anyway.
+        const int sideUnit = std::clamp(int(tall * .17), 44, 76), sideGap = 2 * spacing;
+        result.sideTray = powers && area.width() - 40 >= tall + sideGap + PowerBar::thicknessFor(sideUnit);
+        if (result.sideTray) {
+            result.unit = sideUnit;
+            result.extra = sideGap + PowerBar::thicknessFor(sideUnit);
+            result.side = std::max(board_->minimumSizeHint().width(), tall);
+        } else {
+            if (powers) {
+                // Size the tray from the room the board would have without it, then reserve its height.
+                const int rough = std::min(area.width() - 40, tall - PowerBar::thicknessFor(56) - spacing);
+                result.unit = std::clamp(int(rough * .17), 44, 76);
+                result.below = PowerBar::thicknessFor(result.unit) + spacing;
+            }
+            result.side = std::max(board_->minimumSizeHint().width(), std::min(area.width() - 40, tall - result.below));
+        }
+        return result;
+    };
+    // A wide window spreads the header out and centers the board itself, matching the tray with a spacer.
+    auto layout = plan(true);
+    const int balanced = layout.side + 2 * layout.extra;
+    const bool wide = area.width() - 96 >= std::max(balanced + 240, 760);
+    if (!wide)
+        layout = plan(false);
+    if (wide != wide_) {
+        wide_ = wide;
+        if (wide) {
+            scoreRow_->layout()->removeWidget(scores_);
+            headerGrid_->addWidget(scores_, 0, 1, Qt::AlignCenter);
+        } else {
+            headerGrid_->removeWidget(scores_);
+            scoreRow_->layout()->addWidget(scores_);
+        }
+        status_->setAlignment(wide ? Qt::AlignCenter : Qt::AlignLeft | Qt::AlignVCenter);
+    }
+    sideTray_ = layout.sideTray;
+    powerBar_->setOrientation(sideTray_ ? Qt::Vertical : Qt::Horizontal);
+    if (powers)
+        powerBar_->setUnit(layout.unit);
+    middle_->setDirection(sideTray_ ? QBoxLayout::LeftToRight : QBoxLayout::TopToBottom);
+    middle_->setSpacing(sideTray_ ? 2 * spacing : spacing);
+    const int balance = wide ? layout.extra : 0;
+    balance_->changeSize(balance, 0, QSizePolicy::Fixed, QSizePolicy::Minimum);
+    middle_->invalidate();
+    const int stage = layout.side + layout.extra + balance;
+    stage_->setFixedWidth(stage);
+    // Small windows keep the header and score row readable even when the board is narrower.
+    const int column = wide ? std::min(area.width() - 96, std::max(stage + 240, 1200)) : std::max(stage, std::min(area.width() - 24, 360));
+    // Collapse header labels to icons when the column is narrow.
+    const bool compact = column < 380;
     statsButton_->setText(compact ? QString() : "Stats");
-    undoButton_->setText(compact ? QString() : "Undo");
     newButton_->setText(compact ? QString() : "New game");
-    const int horizontal = std::max(12, (area.width() - side) / 2);
-    const int vertical = std::max(12, (area.height() - side - chrome) / 2);
+    const int horizontal = std::max(12, (area.width() - column) / 2);
+    const int vertical = std::max(12, (area.height() - layout.side - layout.below - layout.chrome) / 2);
     content_->layout()->setContentsMargins(horizontal, vertical, horizontal, vertical);
     fitStats();
 }

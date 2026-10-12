@@ -192,6 +192,7 @@ rejects 'an unknown subcommand' --config-dir "$config" theme bogus
 rejects 'a missing subcommand' --config-dir "$config" theme
 rejects 'an unknown option' --config-dir "$config" --bogus theme list
 rejects 'a board size of 2' --size 2 --help
+rejects 'a board size of 6' --size 6 --help
 rejects 'a board size of 9' --size 9 --help
 rejects 'a non-numeric board size' --size four --help
 rejects 'a missing board size' --size

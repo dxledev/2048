@@ -15,6 +15,9 @@ class WonOverlay;
 class Board : public QWidget {
     Q_OBJECT
 public:
+    /** @brief What a click picks: nothing (swipes move), a tile to swap, or a value to remove. */
+    enum class Pick { None, Swap, Remove };
+
     /** @brief Create the board and its hidden win overlay. */
     explicit Board(QWidget *parent = nullptr);
     /** @brief Show @p game; the board keeps a pointer and never owns it. */
@@ -33,6 +36,15 @@ public:
     static double cornerRadius(double side) { return std::min(16.0, side * .03); }
     /** @brief Show the win overlay while the game's win is pending and no animation runs; hide it otherwise. */
     void refreshWin();
+    /** @brief Enter or leave pick mode; clicks emit picked() and swipes are ignored while picking. */
+    void setPick(Pick pick);
+    Pick pick() const { return pick_; }
+    /** @brief Ring the tile in cell @p index as the first pick of a swap, or none for -1. */
+    void setSelected(int index);
+    /** @brief Return the rectangle of cell @p index in widget coordinates. */
+    QRectF cellBounds(int index) const { return cellRect(index, boardRect()); }
+    /** @brief Return the cell under @p position, or -1 between and outside cells. */
+    int cellAt(const QPointF &position) const;
     /** @brief Return whether the win overlay is fully revealed. */
     bool showingWin() const;
     QSize sizeHint() const override { return {420, 420}; }
@@ -41,6 +53,8 @@ public:
 signals:
     /** @brief Emitted for a mouse or touch swipe across the board. */
     void swiped(Direction direction);
+    /** @brief Emitted when a cell is clicked in pick mode. */
+    void picked(int index);
     /** @brief Emitted when the win overlay finishes its reveal. */
     void winRevealed();
 
@@ -48,6 +62,8 @@ protected:
     void paintEvent(QPaintEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+    void leaveEvent(QEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
 
 private:
@@ -58,6 +74,8 @@ private:
     QElapsedTimer clock_;
     QPointF pressed_;
     bool pressing_ = false;
+    Pick pick_ = Pick::None;
+    int selected_ = -1, hovered_ = -1, pressedCell_ = -1;
     WonOverlay *wonOverlay_;
     /** @brief Top-left corner and edge length of a cell on a board drawn in @p board. */
     QRectF cellRect(int index, const QRectF &board) const;
@@ -65,6 +83,10 @@ private:
     void paintBoard(QPainter &painter, const QRectF &board) const;
     /** @brief Paint the settled board into a small image for the win overlay to blur. */
     QPixmap snapshot() const;
+    /** @brief Point at tiles that a click would pick, and use the normal cursor elsewhere. */
+    void updateCursor();
+    /** @brief Ring the selected tile and whatever the pointer would pick. */
+    void paintPicks(QPainter &painter, const QRectF &board) const;
     /** @brief Draw one tile face and its number, scaled around its center. */
     void paintTile(QPainter &painter, const QRectF &cell, int value, double scale) const;
 };

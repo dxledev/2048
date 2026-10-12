@@ -4,13 +4,13 @@ A small, fast 2048 for the Linux desktop, written in C++20 with Qt 6 Widgets. Sl
 
 ## Features
 
-- **Classic rules.** Tiles slide as far as they can, equal pairs merge once per move, and every move adds a 2 (90%) or a 4. Reach 2048 to win: the board blurs behind an animated “You won!” until you choose **Keep going** for bigger tiles. Closing the dialog another way leaves the board won; a slide reopens it, and undo takes you back below 2048.
-- **Boards from 3×3 to 8×8**, with a best score kept for each size.
-- **Undo** up to 32 moves. The game, its undo history, and best scores survive restarts.
-- **Statistics** in four tabs (Overview, Tiles, Games, Style) for every board size or all of them together: games, wins and win rate, best and average score, the fastest win, win streaks, play time, how often each tile was reached, a chart of recent scores, the current game, and move directions. Play time counts only while the window is active, and an idle stretch adds at most a minute.
+- **Classic rules.** Tiles slide as far as they can, equal pairs merge once per move, and every move adds a 2 (90%) or a 4. Reach 2048 to win: the board blurs behind an animated “You won!” until you choose **Keep going** for bigger tiles. Closing the dialog another way leaves the board won; a slide reopens it, and undo (Standard mode) takes you back below 2048.
+- **Boards from 3×3 to 5×5**, with a best score kept for each size and mode.
+- **Two modes**, chosen in the New game dialog. **Standard** adds three power-ups below the board (or beside it, in a wide window), starting with 2 Undos, 1 Swap, and no Deletes, shown as pips: **Undo** takes back a move, **Swap** exchanges two tiles, and **Delete** clears every tile of a number you pick. Making a 128, 256, or 512 tile earns one more Undo, Swap, or Delete. Uses cap at 2, and undoing a move takes back any use it earned. **Classic** is the original game, with no power-ups and no undo. The game and best scores survive restarts.
+- **Statistics** kept separately for Standard and Classic, in four tabs (Overview, Tiles, Games, Style) for every board size or all of them together: games, wins and win rate, best and average score, the fastest win, win streaks, play time, how often each tile was reached, a chart of recent scores, the current game, and move directions. Play time counts only while the window is active, and an idle stretch adds at most a minute. Reset clears only the mode being shown.
 - **Animations** for sliding, merging, and new tiles. A new move finishes the running animation first, so input is never dropped.
 - **Keyboard and swipe** controls.
-- **Resizable window.** The board scales with the window, and the buttons collapse to icons when space is tight.
+- **Resizable window.** The board scales with the window, and the buttons collapse to icons when space is tight. In a wide window the header spreads across it with the scores in the middle, and the board stays centered.
 - **Native Wayland**, with a **translucent window** when the theme background has an alpha channel.
 - **In-window modal dialogs** over a blurred backdrop instead of separate popup windows.
 - **Painter-drawn icons.** Every glyph, and the launcher icon `icon.svg`, is drawn in the theme's colors.
@@ -61,12 +61,14 @@ Alternatively, `cmake --install build --prefix ~/.local` installs the binary, `i
 | --- | --- |
 | Arrow keys, WASD, HJKL | Slide the tiles |
 | Swipe or drag on the board | Slide the tiles |
-| U, Ctrl+Z, Backspace | Undo |
-| N | New game (pick a board size) |
+| U, Ctrl+Z, Backspace | Undo (Standard mode) |
+| X | Swap two tiles |
+| R, Delete | Delete tiles by number |
+| N | New game (pick a mode and board size) |
 | T | Statistics |
 | Tab, Shift+Tab, ←/→, 1–4 | Switch tabs in Statistics |
 | Enter | Confirm the open dialog |
-| Esc | Close the open dialog |
+| Esc | Close the open dialog, or cancel a swap or delete |
 
 The last game resumes on launch. `2048 --size 5` plays on a 5×5 board; a saved game resumes only if it has that size. `--opaque` turns translucency off, and `--config-dir DIR` uses a separate configuration.
 
@@ -166,8 +168,9 @@ Followed sources are watched for edits, atomic replacements, and relinked symlin
 
 | Path or variable | Purpose |
 | --- | --- |
-| `~/.config/2048/game.json` | Current game, undo history, and best score per board size |
-| `~/.config/2048/stats.json` | Lifetime statistics, the last 30 finished games, and the current game's record |
+| `~/.config/2048/game.json` | Current game, undo history, and best score per board size for each mode |
+| `~/.config/2048/stats.json` | Standard statistics: lifetime totals, the last 30 finished games, and the current game's record |
+| `~/.config/2048/stats-classic.json` | Classic statistics, in the same format |
 | `~/.config/2048/theme.json` | Palette and the followed source |
 | `~/.config/2048/icon.svg` | Launcher icon in the theme's colors |
 | `GAME_2048_CONFIG_DIR` | Use another configuration directory (same as `--config-dir`) |

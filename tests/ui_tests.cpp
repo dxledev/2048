@@ -16,6 +16,9 @@
 #include <QApplication>
 #include <QDir>
 #include <QFile>
+#include <QFrame>
+#include <QLocale>
+#include <QLabel>
 #include <QPushButton>
 #include <QSaveFile>
 #include <QSignalSpy>
@@ -80,6 +83,11 @@ QPushButton *buttonNamed(const QWidget *parent, const QString &name) {
     return nullptr;
 }
 
+/** @brief Click the center of cell @p index on the window's board. */
+void clickCell(const Window &window, int index) {
+    QTest::mouseClick(window.board(), Qt::LeftButton, {}, window.board()->cellBounds(index).center().toPoint());
+}
+
 QString savedColor(const QString &config, const QString &key) {
     return readJson(config + "/theme.json").value("colors").toObject().value(key).toString();
 }
@@ -92,6 +100,15 @@ class UiTests : public QObject {
 private:
     std::unique_ptr<QTemporaryDir> root_;
     QString themes_, config_;
+
+    /** @brief Open a window on a saved @p game, so tests can start from any board and charges. */
+    std::unique_ptr<Window> windowOn(const Game &game) {
+        saveSession(config_ + "/game.json", game, {});
+        auto result = window(presetTheme("midnight"), game.size());
+        if (!QTest::qWaitForWindowExposed(result.get()))
+            qWarning("window was not exposed");
+        return result;
+    }
 
     std::unique_ptr<Window> window(const Theme &theme, int size = 4) {
         writeJson(config_ + "/theme.json", theme.toJson());
@@ -148,6 +165,325 @@ private slots:
         QVERIFY(QFileInfo::exists(config_ + "/game.json"));
     }
 
+    void powerBarIsStandardOnly() {
+        auto w = window(presetTheme("midnight"));
+        QVERIFY(w->powerBar()->isVisible());
+        QCOMPARE(w->game().mode(), Mode::PowerUps);
+        // The tray sits between the board and the footer, centered.
+        QVERIFY(w->powerBar()->geometry().top() >= w->board()->geometry().bottom());
+        QVERIFY(qAbs(w->powerBar()->geometry().center().x() - w->board()->geometry().center().x()) <= 1);
+        w->startNewGame(4, Mode::Classic);
+        QVERIFY(!w->powerBar()->isVisible());
+        QCOMPARE(w->game().mode(), Mode::Classic);
+        QVERIFY(w->status().contains("Classic"));
+        moveOnce(*w);
+        QTest::keyClick(w.get(), Qt::Key_U);
+        QCOMPARE(w->status(), QString("Classic mode has no undo"));
+        QTest::keyClick(w.get(), Qt::Key_X);
+        QCOMPARE(w->board()->pick(), Board::Pick::None);
+        w->startNewGame(4);
+        QVERIFY(w->powerBar()->isVisible());
+    }
+
+    void headerHoldsActionsAboveScores() {
+        auto w = window(presetTheme("midnight"));
+        QVERIFY(QTest::qWaitForWindowExposed(w.get()));
+        auto *stats = buttonNamed(w.get(), "Statistics · T");
+        auto *score = w->findChild<QFrame *>("scoreCard");
+        QVERIFY(stats && score);
+        const auto top = [&](QWidget *widget) { return widget->mapTo(w.get(), QPoint()).y(); };
+        QVERIFY(top(stats) + stats->height() <= top(score));
+        QVERIFY(top(score) + score->height() <= top(w->board()));
+    }
+
+    void wideWindowsSpreadTheHeader() {
+        auto w = window(presetTheme("midnight"));
+        QVERIFY(QTest::qWaitForWindowExposed(w.get()));
+        auto *stats = buttonNamed(w.get(), "Statistics · T");
+        auto *score = w->findChild<QFrame *>("scoreCard");
+        QVERIFY(stats && score);
+        const auto at = [&](QWidget *widget) { return QRect(widget->mapTo(w.get(), QPoint()), widget->size()); };
+        w->resize(1600, 900);
+        // The score cards join the header row, centered over a centered board, with the tray hanging to its right.
+        QTRY_VERIFY(at(score).bottom() > at(stats).top() && at(score).top() < at(stats).bottom());
+        QTRY_VERIFY(qAbs(at(w->board()).center().x() - w->width() / 2) <= 2);
+        const auto cards = at(score).united(at(w->findChildren<QFrame *>("scoreCard").last()));
+        QVERIFY(qAbs(cards.center().x() - w->width() / 2) <= 2);
+        QVERIFY(at(w->powerBar()).left() > at(w->board()).right());
+        // The header reaches well past the board on both sides.
+        auto *brand = w->findChild<QLabel *>("brand");
+        QVERIFY(at(brand).left() < at(w->board()).left() - 150);
+        QVERIFY(at(buttonNamed(w.get(), "New game · N")).right() > at(w->powerBar()).right() + 50);
+        QVERIFY(at(score).bottom() < at(w->board()).top());
+        const auto screenshots = qEnvironmentVariable("G2048_TEST_SCREENSHOTS");
+        if (!screenshots.isEmpty()) {
+            w->resize(1888, 925);
+            QTest::qWait(100);
+            QVERIFY(w->grab().save(screenshots + "/widest.png"));
+            w->resize(1100, 800);
+            QTest::qWait(100);
+            QVERIFY(w->grab().save(screenshots + "/between.png"));
+        }
+        // Back to a narrow window, the cards return to the row under the buttons.
+        w->resize(560, 740);
+        QTRY_VERIFY(at(score).top() >= at(stats).bottom());
+        QTRY_VERIFY(at(score).bottom() <= at(w->board()).top());
+    }
+
+    void wideWindowsMoveTheTrayBeside() {
+        auto w = window(presetTheme("midnight"));
+        QVERIFY(QTest::qWaitForWindowExposed(w.get()));
+        w->resize(1400, 800);
+        QTRY_COMPARE(w->powerBar()->orientation(), Qt::Vertical);
+        auto *bar = w->powerBar();
+        // The layout settles on the next event loop pass.
+        QTRY_VERIFY(bar->geometry().left() > w->board()->geometry().right());
+        QTest::qWait(50);
+        const auto board = w->board()->geometry();
+        QVERIFY(bar->geometry().left() > board.right());
+        QVERIFY(qAbs(bar->geometry().center().y() - board.center().y()) <= 1);
+        QVERIFY(bar->height() > bar->width());
+        // The board grows into the height the tray gave up, and the column stays centered.
+        const auto *content = w->centralWidget()->findChild<QWidget *>("content");
+        const auto margins = content->layout()->contentsMargins();
+        QVERIFY(qAbs(margins.left() - margins.right()) <= 1);
+        QVERIFY(bar->geometry().right() <= w->width() - margins.right());
+        const int wideSide = board.width();
+        const auto screenshots = qEnvironmentVariable("G2048_TEST_SCREENSHOTS");
+        if (!screenshots.isEmpty()) {
+            QVERIFY(w->grab().save(screenshots + "/wide-tray.png"));
+            w->showStats();
+            QVERIFY(w->grab().save(screenshots + "/stats-wide.png"));
+            w->statsModal()->dismiss();
+            w->resize(340, 500);
+            QTRY_COMPARE(bar->orientation(), Qt::Horizontal);
+            QTest::qWait(50);
+            QVERIFY(w->grab().save(screenshots + "/narrowest.png"));
+            w->showStats();
+            QVERIFY(w->grab().save(screenshots + "/stats-narrowest.png"));
+            w->statsModal()->dismiss();
+        }
+        w->resize(560, 800);
+        QTRY_COMPARE(bar->orientation(), Qt::Horizontal);
+        QTRY_VERIFY(bar->geometry().top() >= w->board()->geometry().bottom());
+        QVERIFY(w->board()->width() < wideSide);
+        // Classic has no tray, so nothing moves beside the board.
+        w->resize(1400, 800);
+        w->startNewGame(4, Mode::Classic);
+        QVERIFY(!bar->isVisible());
+    }
+
+    void undoWorksTwiceThenRefuses() {
+        auto w = window(presetTheme("midnight"));
+        for (int round = 0; round < 2; ++round) {
+            moveOnce(*w);
+            QVERIFY(w->powerBar()->button(Power::Undo)->isEnabled());
+            QTest::keyClick(w.get(), Qt::Key_U);
+            QCOMPARE(w->game().charges(Power::Undo), 1 - round);
+        }
+        moveOnce(*w);
+        QVERIFY(!w->powerBar()->button(Power::Undo)->isEnabled());
+        const auto cells = w->game().cells();
+        QTest::keyClick(w.get(), Qt::Key_U);
+        QCOMPARE(w->game().cells(), cells);
+        QCOMPARE(w->status(), QString("No undos left · make a 128 tile to earn one"));
+    }
+
+    void pipsAndTooltipsReflectCharges() {
+        Game game(4, Mode::PowerUps, 1);
+        game.setValues({2, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+        game.setCharges(Power::Undo, 1);
+        game.setCharges(Power::Swap, 0);
+        game.setCharges(Power::Remove, 2);
+        auto w = windowOn(game);
+        auto *bar = w->powerBar();
+        QCOMPARE(bar->button(Power::Undo)->charges(), 1);
+        QCOMPARE(bar->button(Power::Swap)->charges(), 0);
+        QCOMPARE(bar->button(Power::Remove)->charges(), 2);
+        QCOMPARE(bar->button(Power::Undo)->toolTip(),
+                 QString("Undo · U\nNothing to undo yet. Make a 128 tile to earn +1.\n1 of 2 uses left"));
+        QCOMPARE(bar->button(Power::Swap)->toolTip(), QString("Swap two tiles · X\nMake a 256 tile to earn +1.\n0 of 2 uses left"));
+        QCOMPARE(bar->button(Power::Remove)->toolTip(),
+                 QString("Delete tiles by number · R\nFull. Spend one, then make a 512 tile to earn +1.\n2 of 2 uses left"));
+        QVERIFY(!bar->button(Power::Swap)->isEnabled());
+        QVERIFY(bar->button(Power::Remove)->isEnabled());
+        QCOMPARE(bar->button(Power::Swap)->accessibleName(), QString("Swap two tiles"));
+        moveOnce(*w);
+        QVERIFY(bar->button(Power::Undo)->isEnabled());
+        QTest::keyClick(w.get(), Qt::Key_U);
+        QCOMPARE(bar->button(Power::Undo)->charges(), 0);
+        QCOMPARE(bar->button(Power::Undo)->toolTip(), QString("Undo · U\nMake a 128 tile to earn +1.\n0 of 2 uses left"));
+    }
+
+    void earnedChargesAreAnnounced() {
+        Game game(4, Mode::PowerUps, 1);
+        game.setValues({64, 64, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+        game.setCharges(Power::Undo, 1);
+        auto w = windowOn(game);
+        QVERIFY(w->move(Direction::Left));
+        QCOMPARE(w->game().charges(Power::Undo), 2);
+        QCOMPARE(w->status(), QString("+1 Undo · you made a 128"));
+        QCOMPARE(w->powerBar()->button(Power::Undo)->charges(), 2);
+    }
+
+    void swapTwoTilesByClicking() {
+        Game game(4, Mode::PowerUps, 1);
+        game.setValues({2, 2, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+        game.setCharges(Power::Swap, 2);
+        auto w = windowOn(game);
+        auto *swap = w->powerBar()->button(Power::Swap);
+        swap->click();
+        QCOMPARE(w->board()->pick(), Board::Pick::Swap);
+        QVERIFY(swap->isChecked());
+        QCOMPARE(w->status(), QString("Pick two tiles to swap · Esc cancels"));
+        clickCell(*w, 5); // empty cell: nothing happens
+        clickCell(*w, 0);
+        clickCell(*w, 1); // equal values are refused and the first pick stays
+        QCOMPARE(w->status(), QString("Pick a tile with a different number"));
+        QCOMPARE(w->board()->pick(), Board::Pick::Swap);
+        QCOMPARE(w->game().charges(Power::Swap), 2);
+        clickCell(*w, 2);
+        QCOMPARE(w->game().at(0).value, 4);
+        QCOMPARE(w->game().at(2).value, 2);
+        QCOMPARE(w->game().charges(Power::Swap), 1);
+        QCOMPARE(w->board()->pick(), Board::Pick::None);
+        QVERIFY(!swap->isChecked());
+        QVERIFY(w->board()->animating());
+        QCOMPARE(w->powerBar()->button(Power::Swap)->charges(), 1);
+        QTRY_VERIFY(QFileInfo::exists(config_ + "/game.json"));
+        // Swapping is one undo step.
+        QTest::keyClick(w.get(), Qt::Key_U);
+        QCOMPARE(w->game().at(0).value, 2);
+    }
+
+    void deleteRemovesEveryTileOfTheClickedValue() {
+        Game game(4, Mode::PowerUps, 1);
+        game.setValues({2, 4, 2, 0, 8, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+        game.setCharges(Power::Remove, 2);
+        auto w = windowOn(game);
+        QTest::keyClick(w.get(), Qt::Key_R);
+        QCOMPARE(w->board()->pick(), Board::Pick::Remove);
+        QVERIFY(w->powerBar()->button(Power::Remove)->isChecked());
+        QCOMPARE(w->status(), QString("Pick a number to delete · Esc cancels"));
+        clickCell(*w, 10); // empty
+        QCOMPARE(w->game().charges(Power::Remove), 2);
+        clickCell(*w, 2);
+        for (const auto &tile : w->game().cells())
+            QVERIFY(tile.value != 2);
+        QCOMPARE(w->game().at(1).value, 4);
+        QCOMPARE(w->game().at(4).value, 8);
+        QCOMPARE(w->game().charges(Power::Remove), 1);
+        QCOMPARE(w->status(), QString("Removed every 2"));
+        QCOMPARE(w->board()->pick(), Board::Pick::None);
+    }
+
+    void escapeAndMovesCancelPicking() {
+        Game game(4, Mode::PowerUps, 1);
+        game.setValues({2, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+        game.setCharges(Power::Swap, 2);
+        game.setCharges(Power::Remove, 2);
+        auto w = windowOn(game);
+        QTest::keyClick(w.get(), Qt::Key_X);
+        QCOMPARE(w->board()->pick(), Board::Pick::Swap);
+        QTest::keyClick(w.get(), Qt::Key_Escape);
+        QCOMPARE(w->board()->pick(), Board::Pick::None);
+        QVERIFY(!w->powerBar()->button(Power::Swap)->isChecked());
+        QCOMPARE(w->game().charges(Power::Swap), 2);
+
+        // The same button disarms; the other button switches; a slide cancels.
+        w->powerBar()->button(Power::Swap)->click();
+        w->powerBar()->button(Power::Swap)->click();
+        QCOMPARE(w->board()->pick(), Board::Pick::None);
+        w->armSwap();
+        w->armRemove();
+        QCOMPARE(w->board()->pick(), Board::Pick::Remove);
+        QVERIFY(!w->powerBar()->button(Power::Swap)->isChecked());
+        QTest::keyClick(w.get(), Qt::Key_Delete);
+        QCOMPARE(w->board()->pick(), Board::Pick::None);
+        w->armSwap();
+        QTest::keyClick(w.get(), Qt::Key_Right);
+        QCOMPARE(w->board()->pick(), Board::Pick::None);
+        QCOMPARE(w->game().moves(), 1);
+
+        // Dragging across the board never slides while picking.
+        w->armSwap();
+        const auto *board = w->board();
+        QTest::mousePress(w->board(), Qt::LeftButton, {}, board->cellBounds(0).center().toPoint());
+        QTest::mouseRelease(w->board(), Qt::LeftButton, {}, board->cellBounds(3).center().toPoint());
+        QCOMPARE(w->game().moves(), 1);
+        QCOMPARE(w->board()->pick(), Board::Pick::Swap);
+        w->requestNewGame();
+        QCOMPARE(w->board()->pick(), Board::Pick::None);
+    }
+
+    void newGameModalChoosesModeAndSize() {
+        auto w = window(presetTheme("midnight"));
+        w->requestNewGame();
+        QStringList sizes, modes;
+        for (auto *chip : w->newGameModal()->findChildren<QPushButton *>("chip")) {
+            if (chip->text().contains(QString::fromUtf8("×")))
+                sizes << chip->text();
+            else
+                modes << chip->text();
+        }
+        QCOMPARE(sizes, (QStringList{QString::fromUtf8("3×3"), QString::fromUtf8("4×4"), QString::fromUtf8("5×5")}));
+        QCOMPARE(modes, (QStringList{"Standard", "Classic"}));
+        const auto chips = w->newGameModal()->findChildren<QPushButton *>("chip");
+        QVERIFY(chips.at(4)->isChecked() || chips.at(3)->isChecked());
+        QVERIFY(chips.at(3)->isChecked());
+        auto *hint = w->newGameModal()->findChildren<QLabel *>("muted").last();
+        QVERIFY(hint->text().startsWith("Undo, swap"));
+        chips.at(4)->click();
+        QCOMPARE(hint->text(), QString("The original game. No power-ups, no undo."));
+        chips.at(0)->click();
+        QTest::keyClick(w->newGameModal(), Qt::Key_Return);
+        QCOMPARE(w->game().mode(), Mode::Classic);
+        QCOMPARE(w->game().size(), 3);
+        QCOMPARE(w->status(), QString::fromUtf8("New 3×3 game · Classic"));
+        QVERIFY(!w->powerBar()->isVisible());
+        // The modal preselects the current mode.
+        w->requestNewGame();
+        QVERIFY(chips.at(4)->isChecked());
+        QTest::keyClick(w->newGameModal(), Qt::Key_Escape);
+        // "Try again" keeps the mode.
+        w->startNewGame(4, Mode::Classic);
+        QCOMPARE(w->game().mode(), Mode::Classic);
+    }
+
+    void lossDialogOffersPowerUpsInsteadOfUndo() {
+        const std::vector<int> stuck{2, 4, 2, 4, 4, 2, 4, 2, 2, 4, 2, 4, 4, 2, 4, 2};
+        Game game(4, Mode::PowerUps, 1);
+        game.setValues(stuck);
+        auto w = windowOn(game);
+        QTRY_VERIFY(w->resultModal()->isVisible());
+        auto *secondary = w->resultModal()->findChild<QPushButton *>("secondary");
+        QCOMPARE(secondary->text(), QString("Keep trying"));
+        QVERIFY(secondary->isEnabled());
+        secondary->click();
+        QVERIFY(!w->resultModal()->isVisible());
+        for (int index = 0; index < 16; ++index)
+            QCOMPARE(w->game().at(index).value, stuck[index]);
+        QVERIFY(w->status().contains("use a power-up"));
+        w.reset();
+
+        game.setCharges(Power::Swap, 0);
+        game.setCharges(Power::Undo, 0);
+        game.setCharges(Power::Remove, 0);
+        w = windowOn(game);
+        QTRY_VERIFY(w->resultModal()->isVisible());
+        secondary = w->resultModal()->findChild<QPushButton *>("secondary");
+        QVERIFY(!secondary->isEnabled());
+        QCOMPARE(w->status(), QString("No moves left · start again"));
+        w.reset();
+
+        Game classic(4, Mode::Classic, 1);
+        classic.setValues(stuck);
+        w = windowOn(classic);
+        QTRY_VERIFY(w->resultModal()->isVisible());
+        QVERIFY(!w->resultModal()->findChild<QPushButton *>("secondary")->isVisible());
+        QCOMPARE(w->status(), QString("No moves left · start again"));
+    }
+
     void keyboardMovesAndUndoes() {
         auto w = window(presetTheme("midnight"));
         const auto values = [&] {
@@ -170,7 +506,7 @@ private slots:
     }
 
     void winAndGameOverOpenResultModal() {
-        Game game(4, 1);
+        Game game(4, Mode::PowerUps, 1);
         game.setValues({1024, 1024, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 100);
         saveSession(config_ + "/game.json", game, {});
         auto w = window(presetTheme("midnight"));
@@ -182,14 +518,14 @@ private slots:
 
         game.setValues({2, 4, 2, 4, 4, 2, 4, 2, 2, 4, 2, 4, 4, 2, 4, 2}, 50);
         QVERIFY(game.over());
-        saveSession(config_ + "/game.json", game, {{4, 900}});
+        saveSession(config_ + "/game.json", game, {BestScores{{4, 900}}, {}});
         w = window(presetTheme("midnight"));
         QTRY_VERIFY(w->resultModal()->isVisible());
         QCOMPARE(w->best(), 900);
     }
 
     void wonOverlay() {
-        Game game(4, 1);
+        Game game(4, Mode::PowerUps, 1);
         game.setValues({1024, 1024, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 100);
         saveSession(config_ + "/game.json", game, {});
         auto w = window(presetTheme("midnight"));
@@ -345,7 +681,7 @@ private slots:
         QVERIFY(w->statsModal()->isVisible());
         QCOMPARE(statValue(*w, "Games played"), QString("2"));
         const auto filters = w->statsModal()->findChildren<QPushButton *>("filter");
-        QCOMPARE(filters.size(), 7);
+        QCOMPARE(filters.size(), 4);
         QCOMPARE(filters.at(3)->text(), QString("5×5"));
         filters.at(3)->click();
         QCOMPARE(statValue(*w, "Games played"), QString("1"));
@@ -355,6 +691,52 @@ private slots:
         filters.at(0)->click();
         QCOMPARE(statValue(*w, "Games played"), QString("2"));
         QCOMPARE(statValue(*w, "Current game moves"), QString("1"));
+    }
+
+    void statsAndBestsAreSplitByMode() {
+        auto w = window(presetTheme("midnight"));
+        moveOnce(*w);
+        moveOnce(*w);
+        const int standardScore = w->game().score();
+        w->startNewGame(4, Mode::Classic);
+        QCOMPARE(w->stats(Mode::PowerUps).totals().games, 1);
+        QCOMPARE(w->stats(Mode::PowerUps).current().moves, 0);
+        QCOMPARE(w->stats(Mode::Classic).totals().games, 0);
+        QCOMPARE(w->best(), 0);
+        moveOnce(*w);
+        QCOMPARE(w->stats(Mode::Classic).totals().games, 1);
+        QCOMPARE(w->stats(Mode::PowerUps).totals().games, 1);
+        QTRY_VERIFY(QFileInfo::exists(config_ + "/stats-classic.json"));
+
+        // The panel opens on the live game's mode and the switch shows the other.
+        w->showStats();
+        auto *panel = w->statsPanel();
+        QCOMPARE(panel->mode(), Mode::Classic);
+        QCOMPARE(statValue(*w, "Games played"), QString("1"));
+        auto *standard = buttonNamed(w->statsModal(), "Standard mode statistics");
+        QVERIFY(standard);
+        standard->click();
+        QCOMPARE(panel->mode(), Mode::PowerUps);
+        QCOMPARE(statValue(*w, "Games played"), QString("1"));
+        QCOMPARE(statValue(*w, "Best score"), QLocale().toString(standardScore));
+        // Resetting Standard leaves the live Classic game and its record alone.
+        auto *reset = buttonNamed(w->statsModal(), "Reset statistics");
+        reset->click();
+        reset->click();
+        QCOMPARE(w->stats(Mode::PowerUps).totals().games, 0);
+        QCOMPARE(w->stats(Mode::Classic).totals().games, 1);
+        QCOMPARE(w->stats(Mode::Classic).current().moves, 1);
+        w->statsModal()->dismiss();
+        w.reset();
+
+        // Both files come back on the next launch.
+        w = window(presetTheme("midnight"));
+        QCOMPARE(w->game().mode(), Mode::Classic);
+        QCOMPARE(w->stats(Mode::Classic).current().moves, 1);
+        QCOMPARE(w->stats(Mode::PowerUps).totals().games, 0);
+        w->startNewGame(4, Mode::PowerUps);
+        QCOMPARE(w->stats(Mode::Classic).totals().games, 1);
+        QCOMPARE(w->stats(Mode::Classic).current().moves, 0);
     }
 
     void statsTabsSwitchPages() {
@@ -400,7 +782,7 @@ private slots:
         QCOMPARE(w->stats().totals().games, 0);
         QVERIFY(w->stats().recent().empty());
         QCOMPARE(statValue(*w, "Games played"), QString("0"));
-        QCOMPARE(w->status(), QString("Statistics reset"));
+        QCOMPARE(w->status(), QString("Standard statistics reset"));
         QCOMPARE(loadStats(config_ + "/stats.json").totals().games, 0);
         // Closing the modal disarms a pending reset.
         reset->click();
