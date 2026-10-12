@@ -10,7 +10,7 @@
 
 namespace g2048 {
 
-/** @brief Square tray button: a glyph over a row of pips, one per remaining use. */
+/** @brief Square tray button: a glyph over a row of pips, one per remaining use, or a centered glyph when unlimited. */
 class PowerButton : public QAbstractButton {
     Q_OBJECT
 public:
@@ -21,6 +21,9 @@ public:
     /** @brief Show @p count filled pips out of @p capacity. */
     void setCharges(int count, int capacity);
     int charges() const { return charges_; }
+    /** @brief Center the glyph and drop the pips (Casual mode, where uses never run out). */
+    void setUnlimited(bool unlimited);
+    bool unlimited() const { return unlimited_; }
     QSize sizeHint() const override { return {64, 64}; }
 
 protected:
@@ -34,6 +37,7 @@ private:
     Glyph glyph_;
     Theme theme_;
     int charges_ = 0, capacity_ = Game::maximumCharges;
+    bool unlimited_ = false;
 };
 
 /** @brief Rounded tray beside or under the board holding the undo, swap, and delete power-up buttons. */

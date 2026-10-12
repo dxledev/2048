@@ -220,7 +220,7 @@ void Stats::begin(const Game &game, qint64 now) {
 }
 
 void Stats::attach(const Game &game, qint64 now) {
-    if (current_.size != game.size() || current_.moves != game.moves() || !since_) {
+    if (current_.size != game.size() || current_.moves < game.moves() || !since_) {
         begin(game, now);
         return;
     }
@@ -243,7 +243,7 @@ void Stats::recordMove(const Game &game, Direction direction, qint64 now) {
     }
     current_.score = game.score();
     current_.highest = std::max(current_.highest, game.highest());
-    current_.moves = game.moves();
+    current_.moves = saturate(current_.moves + 1LL);
     current_.over = game.over();
     if (game.won() && !current_.wonAtMove)
         current_.wonAtMove = std::max(1, game.moves());

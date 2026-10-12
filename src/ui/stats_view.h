@@ -7,11 +7,25 @@
 #include <QLabel>
 #include <QScrollArea>
 #include <QStackedWidget>
+#include <QTimer>
 #include <QWidget>
 #include <array>
 #include <vector>
 
 namespace g2048 {
+
+/** @brief Display name of @p mode; Mode::PowerUps is always shown as "Standard". */
+inline QString modeLabel(Mode mode) {
+    switch (mode) {
+    case Mode::Classic: return "Classic";
+    case Mode::Casual: return "Casual";
+    case Mode::PowerUps: break;
+    }
+    return "Standard";
+}
+
+/** @brief Modes in the order the interface lists them: Standard, Classic, Casual. */
+inline constexpr std::array<Mode, modeCount> displayModes{Mode::PowerUps, Mode::Classic, Mode::Casual};
 
 /** @brief Painted list of horizontal bars, each led by a label or a tile swatch. */
 class MeterList : public QWidget {
@@ -73,7 +87,7 @@ class StatsPanel : public QWidget {
     Q_OBJECT
 public:
     /** @param stats Statistics of each mode, indexed by Mode. */
-    explicit StatsPanel(const std::array<Stats, 2> &stats, const Game &game, QWidget *parent = nullptr);
+    explicit StatsPanel(const std::array<Stats, modeCount> &stats, const Game &game, QWidget *parent = nullptr);
     /** @brief Board size the totals are filtered to, or 0 for every size. */
     int filter() const;
     /** @brief Mode whose statistics are shown. */
@@ -96,7 +110,7 @@ protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
-    const std::array<Stats, 2> &stats_;
+    const std::array<Stats, modeCount> &stats_;
     const Game &game_;
     QLabel *heading_, *subtitle_;
     QGridLayout *titles_;
@@ -115,6 +129,12 @@ private:
     std::vector<QLabel *> current_, facts_;
     int columns_ = 0;
     bool stacked_ = false; ///< The mode switch has its own row under the heading.
+    QTimer scrollIdle_; ///< Hides the scroll bar a second after the last scroll.
+
+    /** @brief Show the scroll bar now and hide it again once scrolling has been idle for a second. */
+    void wakeScrollBar();
+    /** @brief Mark the scroll bar shown or hidden for the style sheet. */
+    void setScrollBarIdle(bool idle);
 };
 
 }

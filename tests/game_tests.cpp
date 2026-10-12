@@ -365,7 +365,7 @@ private slots:
         QVERIFY(!game.won());
         QVERIFY(game.continued());
         QVERIFY(!game.winPending());
-        QCOMPARE(game.moves(), 1);
+        QCOMPARE(game.moves(), 0);
         QVERIFY(game.lastTurn().motions.empty());
         QVERIFY(game.lastTurn().merged.empty());
         QCOMPARE(game.lastTurn().spawned, -1);
@@ -397,7 +397,7 @@ private slots:
         QCOMPARE(undone, Game::maximumHistory);
         QVERIFY(game.cells() == boards[total - Game::maximumHistory]);
         QCOMPARE(game.score(), scores[total - Game::maximumHistory]);
-        QCOMPARE(game.moves(), total);
+        QCOMPARE(game.moves(), total - Game::maximumHistory);
     }
 
     void jsonRoundTrip() {
@@ -418,7 +418,7 @@ private slots:
         QCOMPARE(data.value("history").toArray().size(), qsizetype(Game::maximumHistory));
         keys = data.value("history").toArray().first().toObject().keys();
         keys.sort();
-        QCOMPARE(keys, QStringList({"charges", "score", "values", "won"}));
+        QCOMPARE(keys, QStringList({"charges", "moves", "score", "values", "won"}));
 
         const auto text = QJsonDocument(data).toJson(QJsonDocument::Compact);
         auto restored = Game::fromJson(QJsonDocument::fromJson(text).object(), 99);
@@ -440,10 +440,12 @@ private slots:
             QVERIFY(game.undo());
             QCOMPARE(valuesOf(restored), valuesOf(game));
             QCOMPARE(restored.score(), game.score());
+            QCOMPARE(restored.moves(), game.moves());
             QVERIFY(uniqueIds(restored));
             ++depth;
         }
         QCOMPARE(depth, Game::maximumHistory);
+        QCOMPARE(restored.moves(), 40 - Game::maximumHistory);
         QVERIFY(!game.canUndo());
         QVERIFY(randomMove(restored, random));
         QVERIFY(uniqueIds(restored));
@@ -506,6 +508,7 @@ private slots:
         QTest::newRow("history charges too high") << withEntry("charges", QJsonArray{2, 2, 3});
         QTest::newRow("history charges short") << withEntry("charges", QJsonArray{2});
         QTest::newRow("classic with history") << with("mode", "classic");
+        QTest::newRow("casual with charges") << with("mode", "casual");
         QTest::newRow("size mismatch") << with("size", 3);
         QTest::newRow("fractional size") << with("size", 4.5);
         QTest::newRow("short values") << with("values", shortValues);
@@ -613,7 +616,53 @@ private slots:
         QVERIFY(!game.canUndo());
         QVERIFY(!game.undo());
         QVERIFY(game.cells() != before);
-        QCOMPARE(game.moves(), 3);
+        QCOMPARE(game.moves(), 1);
+    }
+
+    void undoRestoresMoves() {
+        Game game(4, Mode::Casual, 43);
+        load(game, {2, 0, 0, 0, 4, 0, 0, 0, 8, 0, 0, 0, 16, 0, 0, 0});
+        QVERIFY(game.move(Direction::Right));
+        QVERIFY(game.move(Direction::Left));
+        QCOMPARE(game.moves(), 2);
+        int first = -1, second = -1;
+        for (int index = 0; index < 16; ++index) {
+            if (game.at(index).value && first < 0)
+                first = index;
+            else if (game.at(index).value && game.at(index).value != game.at(first).value && second < 0)
+                second = index;
+        }
+        QVERIFY(game.swap(first, second));
+        QCOMPARE(game.moves(), 2);
+        QVERIFY(game.undo());
+        QCOMPARE(game.moves(), 2);
+        QVERIFY(game.undo());
+        QCOMPARE(game.moves(), 1);
+        QVERIFY(game.undo());
+        QCOMPARE(game.moves(), 0);
+        QVERIFY(!game.undo());
+    }
+
+    void jsonLegacyHistoryMoves() {
+        Game game(4, Mode::PowerUps, 45);
+        load(game, {2, 0, 0, 0, 4, 0, 0, 0, 8, 0, 0, 0, 16, 0, 0, 0});
+        QVERIFY(game.move(Direction::Right));
+        QVERIFY(game.move(Direction::Left));
+        auto data = game.toJson();
+        QJsonArray history;
+        for (const auto &entry : data.value("history").toArray()) {
+            auto snapshot = entry.toObject();
+            snapshot.remove("moves");
+            history.append(snapshot);
+        }
+        data.insert("history", history);
+        // Saves from before undo restored the move count keep the count unchanged on undo.
+        auto restored = Game::fromJson(data, 7);
+        QVERIFY(restored.undo());
+        QCOMPARE(restored.moves(), 2);
+        data.insert("history", QJsonArray{QJsonObject{{"values", data.value("values")}, {"score", 0}, {"moves", -1},
+                                                      {"won", false}, {"charges", QJsonArray{2, 1, 0}}}});
+        QVERIFY_THROWS_EXCEPTION(std::runtime_error, Game::fromJson(data, 7));
     }
 
     void undoNeedsCharge() {
@@ -835,6 +884,95 @@ private slots:
         const auto restored = Game::fromJson(data, 3);
         QVERIFY(restored.mode() == Mode::Classic);
         QCOMPARE(restored.toJson(), data);
+
+        auto stored = data;
+        stored.insert("charges", QJsonArray{2, 2, 2});
+        QVERIFY_THROWS_EXCEPTION(std::runtime_error, Game::fromJson(stored, 1));
+    }
+
+    void casual() {
+        Game game(4, Mode::Casual, 67);
+        QVERIFY(game.mode() == Mode::Casual);
+        QVERIFY(game.unlimitedPowers());
+        QVERIFY(game.hasPowers());
+        QVERIFY(!Game(4, Mode::Classic, 1).unlimitedPowers());
+        QVERIFY(!Game(4, Mode::Classic, 1).hasPowers());
+        QVERIFY(!Game(4, Mode::PowerUps, 1).unlimitedPowers());
+        QVERIFY(Game(4, Mode::PowerUps, 1).hasPowers());
+        for (auto power : {Power::Undo, Power::Swap, Power::Remove})
+            QCOMPARE(game.charges(power), 0);
+        game.setCharges(Power::Undo, 2);
+        QCOMPARE(game.charges(Power::Undo), 0);
+
+        // Nothing to undo before the first move, then undo needs no charge, however often it is used.
+        QVERIFY(!game.canUndo());
+        load(game, {2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+        for (int round = 0; round < 5; ++round) {
+            QVERIFY(game.move(Direction::Left) || game.move(Direction::Right));
+            QVERIFY(game.canUndo());
+            QVERIFY(game.undo());
+            QCOMPARE(game.score(), 0);
+            QCOMPARE(game.charges(Power::Undo), 0);
+            QVERIFY(!game.canUndo());
+        }
+        QVERIFY(game.move(Direction::Left));
+        QVERIFY(game.move(Direction::Down));
+        QVERIFY(game.undo());
+        QVERIFY(game.undo());
+        QVERIFY(!game.undo());
+
+        // Swap and remove work repeatedly without charges.
+        load(game, {2, 4, 8, 16, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+        for (int round = 0; round < 4; ++round) {
+            QVERIFY(game.canSwap(0, 1));
+            QVERIFY(game.swap(0, 1));
+            QCOMPARE(game.charges(Power::Swap), 0);
+        }
+        QVERIFY(!game.canSwap(0, 4));
+        QVERIFY(!game.canSwap(0, 0));
+        QVERIFY(!game.swap(0, 4));
+        QVERIFY(!game.canRemove(32));
+        QVERIFY(game.canRemove(8));
+        QVERIFY(game.remove(8));
+        QVERIFY(!game.canRemove(8));
+        QVERIFY(game.remove(4));
+        QVERIFY(game.remove(2));
+        QCOMPARE(game.charges(Power::Remove), 0);
+        QVERIFY(game.canUndo());
+        for (int step = 0; step < 7; ++step)
+            QVERIFY(game.undo());
+        QVERIFY(!game.canUndo());
+
+        // Making reward tiles earns nothing.
+        for (int value : {128, 256, 512}) {
+            load(game, {value / 2, value / 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+            QVERIFY(game.move(Direction::Left));
+            QCOMPARE(game.highest(), value);
+            for (int index = 0; index < Game::powerCount; ++index)
+                QCOMPARE(game.lastTurn().earned[index], 0);
+            for (auto power : {Power::Undo, Power::Swap, Power::Remove})
+                QCOMPARE(game.charges(power), 0);
+            QVERIFY(game.undo());
+        }
+
+        // History is capped like Standard mode.
+        std::mt19937 random(6);
+        for (int step = 0; step < 100 && randomMove(game, random); ++step) {
+        }
+        QVERIFY(game.toJson().value("history").toArray().size() <= Game::maximumHistory);
+
+        QVERIFY(game.undo()); // Random play may have ended the game; undo makes room for another move.
+        QVERIFY(randomMove(game, random));
+        const auto data = game.toJson();
+        QCOMPARE(data.value("mode").toString(), QString("casual"));
+        QCOMPARE(data.value("charges").toArray(), QJsonArray({0, 0, 0}));
+        QVERIFY(!data.value("history").toArray().isEmpty());
+        auto restored = Game::fromJson(data, 3);
+        QVERIFY(restored.mode() == Mode::Casual);
+        QVERIFY(restored.unlimitedPowers());
+        QCOMPARE(restored.toJson(), data);
+        QVERIFY(restored.canUndo());
+        QVERIFY(restored.undo());
 
         auto stored = data;
         stored.insert("charges", QJsonArray{2, 2, 2});

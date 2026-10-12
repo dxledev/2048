@@ -81,7 +81,7 @@ private:
     ThemeWatcher *watcher_;
     Game game_;
     ModeBests best_;
-    std::array<Stats, 2> stats_; ///< Indexed by Mode.
+    std::array<Stats, modeCount> stats_; ///< Indexed by Mode.
     bool sideTray_ = false; ///< The power-up tray stands beside the board rather than under it.
     bool wide_ = false; ///< The header spans the window with the score cards in its middle.
     bool translucent_ = false;

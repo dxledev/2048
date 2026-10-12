@@ -14,8 +14,16 @@ enum class Direction { Left, Right, Up, Down };
 /** @brief Limited-use power-ups; each starts with its startingCharges and is earned back by making its reward tile. */
 enum class Power { Undo, Swap, Remove };
 
-/** @brief Power-ups mode has limited undo, swap, and remove; Classic is the original game with none of them. */
-enum class Mode { PowerUps, Classic };
+/**
+ * @brief Power-ups mode has limited undo, swap, and remove; Classic is the original game with none of them;
+ * Casual has unlimited use of all three. The values index per-mode data, so new modes are only appended.
+ */
+enum class Mode { PowerUps, Classic, Casual };
+
+/** @brief Number of game modes. */
+inline constexpr int modeCount = 3;
+/** @brief Every mode in Mode order. */
+inline constexpr std::array<Mode, modeCount> allModes{Mode::PowerUps, Mode::Classic, Mode::Casual};
 
 /** @brief One occupied cell: a stable identity for animation and its face value. */
 struct Tile {
@@ -42,10 +50,11 @@ struct Turn {
     std::array<int, 3> earned{}; ///< Charges gained this turn, indexed by Power.
 };
 
-/** @brief Undoable snapshot of board, score, win state, and charges. */
+/** @brief Undoable snapshot of board, score, move count, win state, and charges. */
 struct Snapshot {
     std::vector<Tile> cells;
     int score = 0;
+    int moves = 0;
     bool won = false;
     std::array<int, 3> charges{};
     bool operator==(const Snapshot &) const = default;
@@ -92,6 +101,10 @@ public:
 
     int size() const { return size_; }
     Mode mode() const { return mode_; }
+    /** @brief True when power-ups cost no charges (Casual mode). */
+    bool unlimitedPowers() const { return mode_ == Mode::Casual; }
+    /** @brief True when the mode offers undo, swap, and remove at all (Standard and Casual, not Classic). */
+    bool hasPowers() const { return mode_ != Mode::Classic; }
     int score() const { return score_; }
     /** @brief Largest face value on the board. */
     int highest() const;
@@ -113,16 +126,16 @@ public:
     bool canMove(Direction direction) const;
     /** @brief Slide tiles; returns false and changes nothing when no tile could move. */
     bool move(Direction direction);
-    /** @brief Restore the previous snapshot; returns false without history or Undo charge. */
+    /** @brief Restore the previous snapshot; returns false without history or, outside Casual, an Undo charge. */
     bool undo();
-    bool canUndo() const { return !history_.empty() && charges_[static_cast<int>(Power::Undo)] > 0; }
+    bool canUndo() const { return !history_.empty() && hasCharge(Power::Undo); }
     /** @brief Remaining charges of @p power. */
     int charges(Power power) const;
     /** @brief Whether the tiles in cells @p first and @p second may be exchanged. */
     bool canSwap(int first, int second) const;
     /** @brief Exchange two occupied, unequal tiles; returns false and changes nothing when not allowed. */
     bool swap(int first, int second);
-    /** @brief Whether a tile with face value @p value exists and a Remove charge is available. */
+    /** @brief Whether a tile with face value @p value exists and a Remove charge is available (always, in Casual). */
     bool canRemove(int value) const;
     /** @brief Clear every tile with face value @p value; returns false and changes nothing when not allowed. */
     bool remove(int value);
@@ -155,6 +168,8 @@ private:
     bool continued_ = false;
     std::array<int, powerCount> charges_{};
 
+    /** @brief Whether @p power may be used now: a charge is left, or the mode has unlimited powers. */
+    bool hasCharge(Power power) const { return unlimitedPowers() || charges_[static_cast<int>(power)] > 0; }
     /** @brief Place a 2 (90%) or 4 in a random empty cell; returns its index or -1. */
     int spawn();
     /** @brief Push the current state onto the undo history, dropping the oldest entry when full. */

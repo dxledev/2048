@@ -21,6 +21,16 @@ namespace {
     throw std::runtime_error(message.toStdString());
 }
 
+/** @brief Session key holding the best scores of @p mode; Standard keeps the original "best". */
+const char *bestKey(Mode mode) {
+    switch (mode) {
+    case Mode::PowerUps: return "best";
+    case Mode::Classic: return "bestClassic";
+    case Mode::Casual: return "bestCasual";
+    }
+    return "best";
+}
+
 }
 
 QString defaultConfigDirectory() {
@@ -61,22 +71,26 @@ void saveSession(const QString &path, const Game &game, const ModeBests &best) {
             scores.insert(QString::number(entry.key()), entry.value());
         return scores;
     };
-    writeJson(path, {{"version", 1}, {"game", game.toJson()}, {"best", scores(best[int(Mode::PowerUps)])},
-                     {"bestClassic", scores(best[int(Mode::Classic)])}},
-              QJsonDocument::Compact);
+    QJsonObject data{{"version", 1}, {"game", game.toJson()}};
+    for (const auto mode : allModes)
+        data.insert(bestKey(mode), scores(best[int(mode)]));
+    writeJson(path, data, QJsonDocument::Compact);
 }
 
 Game loadSession(const QString &path, ModeBests &best) {
     const auto data = readJson(path);
     if (data.value("version").toInt() != 1)
         fail("Unsupported session version");
-    // Sessions from before Classic mode have no "bestClassic"; their scores count as Standard.
-    if (!data.value("game").isObject() || !data.value("best").isObject()
-        || !(data.value("bestClassic").isObject() || data.value("bestClassic").isUndefined()))
+    // Sessions from before Classic or Casual mode lack their best-score keys; those modes start empty.
+    if (!data.value("game").isObject() || !data.value("best").isObject())
         fail("Invalid session layout");
+    for (const auto mode : allModes) {
+        if (mode != Mode::PowerUps && !data.value(bestKey(mode)).isObject() && !data.value(bestKey(mode)).isUndefined())
+            fail("Invalid session layout");
+    }
     ModeBests scores;
-    for (const auto mode : {Mode::PowerUps, Mode::Classic}) {
-        const auto saved = data.value(mode == Mode::Classic ? "bestClassic" : "best").toObject();
+    for (const auto mode : allModes) {
+        const auto saved = data.value(bestKey(mode)).toObject();
         for (auto entry = saved.constBegin(); entry != saved.constEnd(); ++entry) {
             bool valid = false;
             const int size = entry.key().toInt(&valid);

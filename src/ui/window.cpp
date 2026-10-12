@@ -11,6 +11,7 @@
 #include "window.h"
 #include "core/color.h"
 #include "core/icon.h"
+#include "chip.h"
 #include "icons.h"
 
 #include <QApplication>
@@ -63,6 +64,18 @@ QPushButton *button(const QString &text, const QString &name, const QString &too
     return widget;
 }
 
+/** @brief Checkable choice in the new-game dialog. */
+Chip *chip(const QString &text, const QString &tooltip) {
+    auto *widget = new Chip(text, 10);
+    widget->setObjectName("chip");
+    widget->setCheckable(true);
+    widget->setCursor(Qt::PointingHandCursor);
+    widget->setFocusPolicy(Qt::NoFocus);
+    widget->setToolTip(tooltip);
+    widget->setAccessibleName(tooltip);
+    return widget;
+}
+
 QString number(int value) {
     return QLocale().toString(value);
 }
@@ -73,7 +86,22 @@ qint64 now() {
 
 /** @brief Statistics file of @p mode; Standard keeps the name used before modes existed. */
 QString statsPath(const QString &directory, Mode mode) {
-    return directory + (mode == Mode::Classic ? "/stats-classic.json" : "/stats.json");
+    switch (mode) {
+    case Mode::Classic: return directory + "/stats-classic.json";
+    case Mode::Casual: return directory + "/stats-casual.json";
+    case Mode::PowerUps: break;
+    }
+    return directory + "/stats.json";
+}
+
+/** @brief One-line description of @p mode in the new-game dialog. */
+QString modeHint(Mode mode) {
+    switch (mode) {
+    case Mode::Classic: return "The original game. No power-ups, no undo.";
+    case Mode::Casual: return "Unlimited undo, swap, and delete. Just for fun.";
+    case Mode::PowerUps: break;
+    }
+    return "Undo, swap, and delete power-ups. Big tiles earn more uses.";
 }
 
 /** @brief Display name of a power-up. */
@@ -91,8 +119,12 @@ QString powerNoun(Power power) {
     return std::array{"undos", "swaps", "deletes"}[static_cast<int>(power)];
 }
 
-/** @brief Three-line hover text: title and shortcut, how to earn more, and remaining uses. */
+/** @brief Three-line hover text: title and shortcut, how to earn more, and remaining uses; just the title in Casual. */
 QString powerTip(Power power, const Game &game) {
+    if (game.unlimitedPowers()) {
+        const QString title = QString("%1 · %2").arg(powerName(power), powerKey(power));
+        return power == Power::Undo && !game.canUndo() ? title + "\nNothing to undo yet." : title;
+    }
     const int left = game.charges(power), reward = Game::rewardValue(power);
     auto earn = left >= Game::maximumCharges ? QString("Full. Spend one, then make a %1 tile to earn +1.").arg(reward)
                                              : QString("Make a %1 tile to earn +1.").arg(reward);
@@ -166,7 +198,7 @@ Window::Window(QString configDirectory, Theme theme, int size, bool translucent,
         }
     }
     raiseBest();
-    for (const auto mode : {Mode::PowerUps, Mode::Classic}) {
+    for (const auto mode : allModes) {
         const QString statistics = statsPath(configDirectory_, mode);
         if (!QFileInfo::exists(statistics))
             continue;
@@ -176,8 +208,11 @@ Window::Window(QString configDirectory, Theme theme, int size, bool translucent,
             message("Statistics could not be restored: " + QString::fromUtf8(error.what()));
         }
     }
-    // Only the live game's mode has a live record; a stray one in the other mode is finished.
-    stats_[static_cast<int>(game_.mode() == Mode::Classic ? Mode::PowerUps : Mode::Classic)].finish();
+    // Only the live game's mode has a live record; a stray one in any other mode is finished.
+    for (const auto mode : allModes) {
+        if (mode != game_.mode())
+            stats_[static_cast<int>(mode)].finish();
+    }
     liveStats().attach(game_, now());
     board_->setGame(&game_);
     board_->animate();
@@ -332,31 +367,27 @@ void Window::buildNewGameModal() {
     chips->setSpacing(6);
     sizes_ = new QButtonGroup(newGame_);
     for (const int size : {3, 4, 5}) {
-        auto *chip = button(QString("%1×%1").arg(size), "chip", QString("%1 by %1 board").arg(size));
-        chip->setCheckable(true);
-        sizes_->addButton(chip, size);
-        chips->addWidget(chip);
+        auto *option = chip(QString("%1×%1").arg(size), QString("%1 by %1 board").arg(size));
+        sizes_->addButton(option, size);
+        chips->addWidget(option);
     }
     body->addLayout(chips);
     body->addWidget(label("MODE", "eyebrow"));
     auto *modeChips = new QHBoxLayout;
     modeChips->setSpacing(6);
     modes_ = new QButtonGroup(newGame_);
-    // Mode::PowerUps is always shown as "Standard".
-    for (const auto &[mode, name] : {std::pair{Mode::PowerUps, "Standard"}, std::pair{Mode::Classic, "Classic"}}) {
-        auto *chip = button(name, "chip", QString("%1 mode").arg(name));
-        chip->setCheckable(true);
-        modes_->addButton(chip, static_cast<int>(mode));
-        modeChips->addWidget(chip);
+    for (const auto mode : displayModes) {
+        const QString name = modeLabel(mode);
+        auto *option = chip(name, QString("%1 mode").arg(name));
+        modes_->addButton(option, static_cast<int>(mode));
+        modeChips->addWidget(option);
     }
     body->addLayout(modeChips);
     modeHint_ = label({}, "muted");
     modeHint_->setWordWrap(true);
     body->addWidget(modeHint_);
     const auto describe = [this] {
-        modeHint_->setText(modes_->checkedId() == static_cast<int>(Mode::Classic)
-            ? "The original game. No power-ups, no undo."
-            : "Undo, swap, and delete power-ups. Big tiles earn more uses.");
+        modeHint_->setText(modeHint(static_cast<Mode>(modes_->checkedId())));
     };
     connect(modes_, &QButtonGroup::idClicked, this, describe);
     body->addSpacing(4);
@@ -461,7 +492,7 @@ void Window::buildStatsModal() {
         save();
         statsPanel_->refresh();
         fitStats();
-        message(QString("%1 statistics reset").arg(shown == Mode::Classic ? "Classic" : "Standard"));
+        message(QString("%1 statistics reset").arg(modeLabel(shown)));
     });
     connect(statsModal_, &Modal::dismissed, this, [this] {
         resetTimer_.stop();
@@ -490,10 +521,10 @@ void Window::applyTheme() {
         QPushButton:disabled { color: @muted; background: transparent; }
         QPushButton#primary { background: @accent; color: @accent_text; border: 1px solid @accent; }
         QPushButton#primary:hover { background: @accent_hover; border-color: @accent_hover; }
-        QPushButton#chip { padding: 9px 4px; }
-        QPushButton#chip:checked { background: @accent_soft; border-color: @accent; color: @text; }
-        QPushButton#filter { padding: 6px 2px; border-radius: 8px; font-size: 12px; }
-        QPushButton#filter:checked { background: @accent_soft; border-color: @accent; color: @text; }
+        QPushButton#chip { padding: 9px 4px; border-color: transparent; }
+        QPushButton#chip:checked { background: @accent_soft; color: @text; }
+        QPushButton#filter { padding: 6px 2px; border-color: transparent; border-radius: 8px; font-size: 12px; }
+        QPushButton#filter:checked { background: @accent_soft; color: @text; }
         QFrame#tabBar { background: @surface_alt; border: 1px solid @border; border-radius: 11px; }
         QPushButton#tab { padding: 6px 0; border: 1px solid transparent; border-radius: 8px; font-size: 12px;
                           background: transparent; color: @muted; }
@@ -509,6 +540,7 @@ void Window::applyTheme() {
         QLabel#fact { font-weight: 600; }
         QScrollBar:vertical { background: transparent; width: 8px; margin: 0; }
         QScrollBar::handle:vertical { background: @border; border-radius: 4px; min-height: 28px; }
+        QScrollBar[idle="true"]::handle:vertical { background: transparent; }
         QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
         QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
         QToolTip { background: @surface_alt; color: @text; border: 1px solid @border; padding: 6px; }
@@ -532,6 +564,9 @@ void Window::applyTheme() {
     palette.setColor(QPalette::Highlight, accent);
     palette.setColor(QPalette::HighlightedText, theme.color("accent_text"));
     setPalette(palette);
+    // Chips stroke their own outlines; see Chip.
+    for (auto *chip : findChildren<Chip *>())
+        chip->setEdges(opaque(theme.color("border")), opaque(accent));
     surface_->color = translucent_ ? theme.color("background") : opaque(theme.color("background"));
     surface_->update();
     const qreal ratio = devicePixelRatioF();
@@ -605,15 +640,16 @@ bool Window::move(Direction direction) {
 void Window::undo() {
     if (modalOpen() && !result_->isVisible())
         return;
-    if (game_.mode() == Mode::Classic) {
+    if (!game_.hasPowers()) {
         message("Classic mode has no undo");
         return;
     }
     cancelPick();
     board_->finish();
     if (!game_.undo()) {
-        message(game_.charges(Power::Undo) ? "Nothing to undo"
-                                           : QString("No undos left · make a %1 tile to earn one").arg(Game::rewardValue(Power::Undo)));
+        message(game_.unlimitedPowers() || game_.charges(Power::Undo)
+                    ? "Nothing to undo"
+                    : QString("No undos left · make a %1 tile to earn one").arg(Game::rewardValue(Power::Undo)));
         return;
     }
     liveStats().recordUndo(game_, now());
@@ -634,7 +670,7 @@ void Window::armRemove() {
 void Window::armPower(Power power) {
     if (modalOpen())
         return;
-    if (game_.mode() == Mode::Classic) {
+    if (!game_.hasPowers()) {
         message("Classic mode has no power-ups");
         return;
     }
@@ -649,7 +685,7 @@ void Window::armPower(Power power) {
         showResult(true);
         return;
     }
-    if (!game_.charges(power)) {
+    if (!game_.unlimitedPowers() && !game_.charges(power)) {
         message(QString("No %1 left · make a %2 tile to earn one").arg(powerNoun(power)).arg(Game::rewardValue(power)));
         return;
     }
@@ -728,8 +764,7 @@ void Window::requestNewGame() {
         chip->setChecked(true);
     if (auto *chip = modes_->button(static_cast<int>(game_.mode())))
         chip->setChecked(true);
-    modeHint_->setText(game_.mode() == Mode::Classic ? "The original game. No power-ups, no undo."
-                                                     : "Undo, swap, and delete power-ups. Big tiles earn more uses.");
+    modeHint_->setText(modeHint(game_.mode()));
     newGameText_->setText(game_.moves() && !game_.over()
         ? QString("Your current score of %1 will be replaced by a fresh board.").arg(number(game_.score()))
         : QString("Pick a board size and mode. Bigger boards give you more room to build."));
@@ -750,7 +785,7 @@ void Window::startNewGame(int size, Mode mode) {
     board_->animate();
     gain_->clear();
     refresh();
-    message(QString("New %1×%1 game").arg(size) + (mode == Mode::Classic ? " · Classic" : ""));
+    message(QString("New %1×%1 game").arg(size) + (mode == Mode::PowerUps ? "" : " · " + modeLabel(mode)));
     save();
 }
 
@@ -815,11 +850,11 @@ void Window::showResult(bool win) {
                                  .arg(number(game_.highest())));
         resultPrimary_->setText("Try again");
         // Undo if possible; otherwise a spare swap or delete may still free the board.
-        const bool spare = game_.charges(Power::Swap) || game_.charges(Power::Remove);
+        const bool spare = game_.unlimitedPowers() || game_.charges(Power::Swap) || game_.charges(Power::Remove);
         resultSecondary_->setText(game_.canUndo() || !spare ? "Undo move" : "Keep trying");
         resultSecondary_->setEnabled(game_.canUndo() || spare);
     }
-    resultSecondary_->setVisible(win || game_.mode() == Mode::PowerUps);
+    resultSecondary_->setVisible(win || game_.hasPowers());
     if (win)
         resultSecondary_->setEnabled(true);
     result_->open();
@@ -831,7 +866,7 @@ void Window::refresh() {
     bestScore_->setText(number(best()));
     refreshPowers();
     if (status_->text().isEmpty() || !statusTimer_.isActive()) {
-        const bool spare = game_.charges(Power::Undo) || game_.charges(Power::Swap) || game_.charges(Power::Remove);
+        const bool spare = game_.unlimitedPowers() || game_.charges(Power::Undo) || game_.charges(Power::Swap) || game_.charges(Power::Remove);
         if (!prompt().isEmpty())
             status_->setText(prompt());
         else if (game_.over())
@@ -840,12 +875,13 @@ void Window::refresh() {
             status_->setText(QString("Highest tile %1").arg(number(game_.highest())));
         else
             status_->setText(QString("%1×%1%2 · %3 moves").arg(game_.size())
-                                 .arg(game_.mode() == Mode::Classic ? " Classic" : "").arg(number(game_.moves())));
+                                 .arg(game_.mode() == Mode::PowerUps ? "" : " " + modeLabel(game_.mode()))
+                                 .arg(number(game_.moves())));
     }
 }
 
 void Window::refreshPowers() {
-    const bool powers = game_.mode() == Mode::PowerUps;
+    const bool powers = game_.hasPowers(), unlimited = game_.unlimitedPowers();
     if (powerBar_->isHidden() == powers) {
         powerBar_->setVisible(powers);
         fitColumn();
@@ -856,8 +892,9 @@ void Window::refreshPowers() {
         const auto power = static_cast<Power>(index);
         auto *item = powerBar_->button(power);
         const auto tip = powerTip(power, game_);
+        item->setUnlimited(unlimited);
         item->setCharges(game_.charges(power), Game::maximumCharges);
-        item->setEnabled(power == Power::Undo ? game_.canUndo() : game_.charges(power) > 0);
+        item->setEnabled(power == Power::Undo ? game_.canUndo() : unlimited || game_.charges(power) > 0);
         item->setToolTip(tip);
         item->setAccessibleName(powerName(power));
         item->setAccessibleDescription(tip.section('\n', 1).replace('\n', ' '));
@@ -881,7 +918,7 @@ void Window::save() {
     saveTimer_.stop();
     try {
         saveSession(configDirectory_ + "/game.json", game_, best_);
-        for (const auto mode : {Mode::PowerUps, Mode::Classic})
+        for (const auto mode : allModes)
             saveStats(statsPath(configDirectory_, mode), stats_[static_cast<int>(mode)]);
     } catch (const std::exception &error) {
         message("Could not save: " + QString::fromUtf8(error.what()));

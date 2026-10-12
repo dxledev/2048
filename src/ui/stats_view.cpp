@@ -6,12 +6,13 @@
  * change only needs a repaint. Bars grow from a shared baseline with rounded
  * data ends; text uses the text and muted colors while marks carry the accent,
  * and won games carry the highlight with a legend so identity never rests on
- * color alone. Standard and Classic games are kept apart and a switch picks
+ * color alone. Standard, Classic, and Casual games are kept apart and a switch picks
  * which mode is shown. Totals follow the size filter; move directions and
  * spawns are only kept across every size and say so.
  */
 #include "stats_view.h"
 #include "core/color.h"
+#include "chip.h"
 
 #include <QDateTime>
 #include <QFrame>
@@ -23,6 +24,7 @@
 #include <QPainterPath>
 #include <QPushButton>
 #include <QScrollBar>
+#include <QStyle>
 #include <QToolTip>
 #include <QVBoxLayout>
 #include <algorithm>
@@ -281,7 +283,7 @@ void ScoreChart::leaveEvent(QEvent *event) {
     QWidget::leaveEvent(event);
 }
 
-StatsPanel::StatsPanel(const std::array<Stats, 2> &stats, const Game &game, QWidget *parent)
+StatsPanel::StatsPanel(const std::array<Stats, modeCount> &stats, const Game &game, QWidget *parent)
     : QWidget(parent), stats_(stats), game_(game) {
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -300,8 +302,8 @@ StatsPanel::StatsPanel(const std::array<Stats, 2> &stats, const Game &game, QWid
     modeRow->setContentsMargins(3, 3, 3, 3);
     modeRow->setSpacing(2);
     modes_ = new QButtonGroup(this);
-    // Mode::PowerUps is always shown as "Standard".
-    for (const auto &[mode, name] : {std::pair{Mode::PowerUps, "Standard"}, std::pair{Mode::Classic, "Classic"}}) {
+    for (const auto mode : displayModes) {
+        const QString name = modeLabel(mode);
         auto *button = new QPushButton(name);
         button->setObjectName("mode");
         button->setCheckable(true);
@@ -311,7 +313,7 @@ StatsPanel::StatsPanel(const std::array<Stats, 2> &stats, const Game &game, QWid
         modes_->addButton(button, static_cast<int>(mode));
         modeRow->addWidget(button);
     }
-    modes_->button(0)->setChecked(true);
+    modes_->button(static_cast<int>(Mode::PowerUps))->setChecked(true);
     connect(modes_, &QButtonGroup::idClicked, this, &StatsPanel::refresh);
     titles->addWidget(switcher, 0, 1, Qt::AlignRight | Qt::AlignVCenter);
     titles->setColumnStretch(0, 1);
@@ -329,7 +331,7 @@ StatsPanel::StatsPanel(const std::array<Stats, 2> &stats, const Game &game, QWid
     chips->setSpacing(4);
     filters_ = new QButtonGroup(this);
     for (const int size : {0, 3, 4, 5}) {
-        auto *chip = new QPushButton(size ? QString("%1×%1").arg(size) : QString("All"));
+        auto *chip = new Chip(size ? QString("%1×%1").arg(size) : QString("All"), 8);
         chip->setObjectName("filter");
         chip->setCheckable(true);
         chip->setCursor(Qt::PointingHandCursor);
@@ -358,6 +360,23 @@ StatsPanel::StatsPanel(const std::array<Stats, 2> &stats, const Game &game, QWid
     content->addWidget(pages_);
     scroll_->setWidget(sections_);
     layout->addWidget(scroll_);
+    // The bar keeps its gutter so content never shifts, but only shows while scrolling or hovered.
+    auto *scrollBar = scroll_->verticalScrollBar();
+    scrollBar->installEventFilter(this);
+    scrollIdle_.setSingleShot(true);
+    scrollIdle_.setInterval(1000);
+    connect(&scrollIdle_, &QTimer::timeout, this, [this] {
+        if (!scroll_->verticalScrollBar()->underMouse())
+            setScrollBarIdle(true);
+    });
+    connect(scrollBar, &QScrollBar::valueChanged, this, &StatsPanel::wakeScrollBar);
+    // Keep cards clear of the bar, with a 5 px gap, exactly when it can scroll.
+    connect(scrollBar, &QScrollBar::rangeChanged, this, [this, content](int, int maximum) {
+        const int gutter = maximum > 0 ? scroll_->verticalScrollBar()->sizeHint().width() + 5 : 0;
+        if (content->contentsMargins().right() != gutter)
+            content->setContentsMargins(0, 2, gutter, 2);
+    });
+    setScrollBarIdle(true);
 
     const auto tab = [this, tabRow](const QString &title) {
         const int index = pages_->count();
@@ -480,7 +499,29 @@ void StatsPanel::setPage(int index) {
     scroll_->verticalScrollBar()->setValue(0);
 }
 
+void StatsPanel::wakeScrollBar() {
+    setScrollBarIdle(false);
+    scrollIdle_.start();
+}
+
+void StatsPanel::setScrollBarIdle(bool idle) {
+    auto *bar = scroll_->verticalScrollBar();
+    if (bar->property("idle").toBool() == idle && bar->property("idle").isValid())
+        return;
+    bar->setProperty("idle", idle);
+    bar->style()->unpolish(bar);
+    bar->style()->polish(bar);
+    bar->update();
+}
+
 bool StatsPanel::eventFilter(QObject *watched, QEvent *event) {
+    if (watched == scroll_->verticalScrollBar()) {
+        if (event->type() == QEvent::Enter)
+            setScrollBarIdle(false);
+        else if (event->type() == QEvent::Leave)
+            scrollIdle_.start();
+        return QWidget::eventFilter(watched, event);
+    }
     if (event->type() != QEvent::KeyPress)
         return QWidget::eventFilter(watched, event);
     // Seen before the modal, so Tab never moves focus out to the board.
@@ -559,7 +600,7 @@ void StatsPanel::refresh() {
     chart_->setGames(std::move(recent));
     chartEmpty_->setVisible(!chart_->count() && (!live || game_.moves()));
     chartEmpty_->setText(live ? QString("The current game joins the chart once you start a new one.")
-                              : QString("No finished %1 games yet.").arg(mode() == Mode::Classic ? "Classic" : "Standard"));
+                              : QString("No finished %1 games yet.").arg(modeLabel(mode())));
 
     const auto &record = stats.current();
     currentTitle_->setVisible(live);
@@ -641,9 +682,11 @@ void StatsPanel::fit(int width, int height) {
     const int content = sections_->layout()->sizeHint().height();
     const int available = std::max(140, height - fixed);
     const bool scrolling = content > available;
-    // Keep cards clear of the scroll bar when one is shown.
-    sections_->layout()->setContentsMargins(0, 2, scrolling ? scroll_->verticalScrollBar()->sizeHint().width() + 6 : 0, 2);
+    // A first guess at the gutter; the bar's rangeChanged corrects it once the real overflow is known.
+    sections_->layout()->setContentsMargins(0, 2, scrolling ? scroll_->verticalScrollBar()->sizeHint().width() + 5 : 0, 2);
     scroll_->setFixedHeight(std::min(content, available));
+    if (scrolling)
+        wakeScrollBar();
 }
 
 }

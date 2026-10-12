@@ -3,7 +3,8 @@
  * @brief Tray of power-up buttons painted from theme colors.
  *
  * Each button is a rounded square with its glyph centered high and one pill
- * per charge along the bottom edge. Everything scales with the button edge, so
+ * per charge along the bottom edge; with unlimited uses there are no pills and
+ * the glyph sits in the middle. Everything scales with the button edge, so
  * the window can resize the tray with the board, and the tray turns from a row
  * into a column when it moves beside the board. A checked button is the armed
  * power-up and inverts to the accent color.
@@ -39,6 +40,13 @@ void PowerButton::setTheme(const Theme &theme) {
 void PowerButton::setCharges(int count, int capacity) {
     charges_ = count;
     capacity_ = capacity;
+    update();
+}
+
+void PowerButton::setUnlimited(bool unlimited) {
+    if (unlimited == unlimited_)
+        return;
+    unlimited_ = unlimited;
     update();
 }
 
@@ -80,7 +88,10 @@ void PowerButton::paintEvent(QPaintEvent *) {
     painter.drawRoundedRect(face, radius, radius);
 
     const double glyphSize = side * .5;
-    paintGlyph(painter, glyph_, QRectF(face.center().x() - glyphSize / 2, face.top() + side * .11, glyphSize, glyphSize), ink);
+    const double glyphTop = unlimited_ ? face.center().y() - glyphSize / 2 : face.top() + side * .11;
+    paintGlyph(painter, glyph_, QRectF(face.center().x() - glyphSize / 2, glyphTop, glyphSize, glyphSize), ink);
+    if (unlimited_)
+        return;
 
     // One pill per use: remaining ones in the ink color, spent ones faint.
     const double pipWidth = side * .22, pipHeight = std::max(3.0, side * .065), gap = side * .06;

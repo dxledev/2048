@@ -22,6 +22,7 @@ target_include_directories(g2048_core PUBLIC src)
 target_link_libraries(g2048_core PUBLIC Qt6::Core Qt6::Gui)
 
 add_library(g2048_ui
+    src/ui/chip.cpp
     src/ui/icons.cpp
     src/ui/modal.cpp
     src/ui/board.cpp

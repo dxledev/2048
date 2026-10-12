@@ -1568,14 +1568,15 @@ private slots:
         game.setValues({2, 2, 4, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 16}, 100);
         QVERIFY(game.move(Direction::Left));
         QVERIFY(game.move(Direction::Up) || game.move(Direction::Down));
-        const ModeBests best{BestScores{{3, 50}, {4, 10}, {5, 2147483647}}, BestScores{{4, 7}}};
+        const ModeBests best{BestScores{{3, 50}, {4, 10}, {5, 2147483647}}, BestScores{{4, 7}}, BestScores{{3, 9}, {5, 31}}};
         saveSession(path, game, best);
         const auto stored = readJson(path);
         QCOMPARE(stored.value("version").toInt(), 1);
         QCOMPARE(stored.value("best").toObject().keys(), (QStringList{"3", "4", "5"}));
         QCOMPARE(stored.value("bestClassic").toObject().keys(), (QStringList{"4"}));
+        QCOMPARE(stored.value("bestCasual").toObject().keys(), (QStringList{"3", "5"}));
 
-        ModeBests loaded{BestScores{{5, 123}}, {}};
+        ModeBests loaded{BestScores{{5, 123}}, {}, BestScores{{4, 1}}};
         const auto restored = loadSession(path, loaded);
         QCOMPARE(restored.toJson(), game.toJson());
         auto expected = best;
@@ -1584,16 +1585,21 @@ private slots:
         QCOMPARE(loaded, expected);
 
         // A best score above the current game's is kept; a missing entry is filled in for its mode only.
-        saveSession(path, game, {BestScores{{4, 5000}}, {}});
+        saveSession(path, game, {BestScores{{4, 5000}}, {}, {}});
         QCOMPARE(loadSession(path, loaded).toJson(), restored.toJson());
-        QCOMPARE(loaded, (ModeBests{BestScores{{4, 5000}}, {}}));
+        QCOMPARE(loaded, (ModeBests{BestScores{{4, 5000}}, {}, {}}));
         saveSession(path, game, {});
         loadSession(path, loaded);
-        QCOMPARE(loaded, (ModeBests{BestScores{{4, game.score()}}, {}}));
+        QCOMPARE(loaded, (ModeBests{BestScores{{4, game.score()}}, {}, {}}));
         Game classic(3, Mode::Classic, 5);
-        saveSession(path, classic, {BestScores{{3, 900}}, {}});
+        saveSession(path, classic, {BestScores{{3, 900}}, {}, BestScores{{3, 40}}});
         loadSession(path, loaded);
-        QCOMPARE(loaded, (ModeBests{BestScores{{3, 900}}, BestScores{{3, classic.score()}}}));
+        QCOMPARE(loaded, (ModeBests{BestScores{{3, 900}}, BestScores{{3, classic.score()}}, BestScores{{3, 40}}}));
+        Game casual(3, Mode::Casual, 5);
+        saveSession(path, casual, {BestScores{{3, 900}}, BestScores{{3, 800}}, {}});
+        const auto casualRestored = loadSession(path, loaded);
+        QVERIFY(casualRestored.mode() == Mode::Casual);
+        QCOMPARE(loaded, (ModeBests{BestScores{{3, 900}}, BestScores{{3, 800}}, BestScores{{3, casual.score()}}}));
     }
 
     void sessionRejects_data() {
@@ -1628,6 +1634,8 @@ private slots:
         QTest::newRow("no best") << edit("best", QJsonValue::Undefined);
         QTest::newRow("classic best array") << edit("bestClassic", QJsonArray{10});
         QTest::newRow("bad classic best") << edit("bestClassic", QJsonObject{{"4", -1}});
+        QTest::newRow("casual best array") << edit("bestCasual", QJsonArray{10});
+        QTest::newRow("bad casual best") << edit("bestCasual", QJsonObject{{"4", -1}});
         QTest::newRow("no game") << edit("game", QJsonValue::Undefined);
         QTest::newRow("version 2") << edit("version", 2);
         QTest::newRow("no version") << edit("version", QJsonValue::Undefined);
@@ -1641,9 +1649,9 @@ private slots:
         QVERIFY(dir.isValid());
         const QString path = dir.filePath("session.json");
         writeJson(path, session);
-        ModeBests best{BestScores{{4, 77}}, {}};
+        ModeBests best{BestScores{{4, 77}}, {}, {}};
         QVERIFY_THROWS_EXCEPTION(std::runtime_error, loadSession(path, best));
-        QCOMPARE(best, (ModeBests{BestScores{{4, 77}}, {}}));
+        QCOMPARE(best, (ModeBests{BestScores{{4, 77}}, {}, {}}));
     }
 
     void sessionAcceptsLimits() {
@@ -1656,8 +1664,8 @@ private slots:
         ModeBests best;
         const auto loaded = loadSession(path, best);
         QCOMPARE(loaded.size(), 3);
-        // Sessions saved before Classic mode have no "bestClassic"; their scores are Standard.
-        QCOMPARE(best, (ModeBests{BestScores{{3, game.score()}, {4, 12}, {5, 2147483647}}, {}}));
+        // Sessions saved before Classic or Casual mode lack "bestClassic" and "bestCasual"; their scores are Standard.
+        QCOMPARE(best, (ModeBests{BestScores{{3, game.score()}, {4, 12}, {5, 2147483647}}, {}, {}}));
     }
 };
 

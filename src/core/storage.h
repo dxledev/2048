@@ -12,7 +12,7 @@ namespace g2048 {
 /** @brief Best score reached for each board size. */
 using BestScores = QMap<int, int>;
 /** @brief Best scores of each mode, indexed by Mode; the modes never share a record. */
-using ModeBests = std::array<BestScores, 2>;
+using ModeBests = std::array<BestScores, modeCount>;
 
 /** @brief Resolve the configuration directory, honoring GAME_2048_CONFIG_DIR. */
 QString defaultConfigDirectory();
@@ -20,7 +20,7 @@ QString defaultConfigDirectory();
 QJsonObject readJson(const QString &path);
 /** @brief Atomically write a JSON object, creating parent directories as needed. */
 void writeJson(const QString &path, const QJsonObject &data, QJsonDocument::JsonFormat format = QJsonDocument::Indented);
-/** @brief Persist the current game and the best scores of both modes. */
+/** @brief Persist the current game and the best scores of every mode. */
 void saveSession(const QString &path, const Game &game, const ModeBests &best);
 /** @brief Restore a saved game and best scores; throws std::runtime_error when invalid. */
 Game loadSession(const QString &path, ModeBests &best);

@@ -253,6 +253,24 @@ private slots:
         QCOMPARE(stats.current().played, 2000);
     }
 
+    void undoneMovesStillCount() {
+        Stats stats;
+        Game game(4, Mode::Casual, 9);
+        stats.begin(game, 100);
+        game.setValues(cells({2, 2, 4}));
+        step(stats, game, Direction::Left, 1000);
+        QVERIFY(game.undo());
+        stats.recordUndo(game, 2000);
+        QCOMPARE(game.moves(), 0);
+        step(stats, game, Direction::Left, 3000);
+        QCOMPARE(game.moves(), 1);
+        QCOMPARE(stats.current().moves, 2);
+        const auto started = stats.current().started;
+        stats.attach(game, 4000);
+        QCOMPARE(stats.current().started, started);
+        QCOMPARE(stats.recent().size(), std::size_t(0));
+    }
+
     void attachKeepsOrReplaces() {
         Stats stats;
         Game game;

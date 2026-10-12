@@ -22,7 +22,7 @@ struct GameRecord {
     qint64 lastActive = 0; ///< Time of the last recorded action, or 0 while suspended.
     int score = 0; ///< Score after the last recorded action.
     int highest = 0; ///< Largest tile this game ever held.
-    int moves = 0; ///< Successful moves, matching Game::moves().
+    int moves = 0; ///< Successful moves, counting undone ones, so never fewer than Game::moves().
     int undos = 0;
     int merges = 0;
     int wonAtMove = 0; ///< Move count when 2048 first appeared, or 0 if never.
@@ -54,7 +54,8 @@ struct Totals {
 /**
  * @brief Lifetime play statistics for one game mode, persisted beside the session.
  *
- * Standard games are kept in stats.json and Classic games in stats-classic.json.
+ * Standard games are kept in stats.json, Classic games in stats-classic.json,
+ * and Casual games in stats-casual.json.
  * The window reports every successful move and undo together with the current
  * wall-clock time. Time between consecutive actions counts as play time, capped
  * at idleLimit so a board left open overnight adds at most a minute.
@@ -68,7 +69,7 @@ public:
     void begin(const Game &game, qint64 now);
     /** @brief Finish the live record (kept only if it has moves) and leave an empty one; for a game in another mode. */
     void finish();
-    /** @brief Keep the live record if it describes @p game (same size and moves), else begin(). */
+    /** @brief Keep the live record if it describes @p game (same size, at least its moves), else begin(). */
     void attach(const Game &game, qint64 now);
     /** @brief Account for a successful move; @p game is the state after it. */
     void recordMove(const Game &game, Direction direction, qint64 now);

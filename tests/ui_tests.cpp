@@ -21,6 +21,8 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QSaveFile>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QSignalSpy>
 #include <QStackedWidget>
 #include <QTemporaryDir>
@@ -315,6 +317,71 @@ private slots:
         QCOMPARE(bar->button(Power::Undo)->toolTip(), QString("Undo · U\nMake a 128 tile to earn +1.\n0 of 2 uses left"));
     }
 
+    void casualModeHasUnlimitedPowerUps() {
+        auto w = window(presetTheme("midnight"));
+        w->startNewGame(4, Mode::Casual);
+        QCOMPARE(w->game().mode(), Mode::Casual);
+        QCOMPARE(w->status(), QString::fromUtf8("New 4×4 game · Casual"));
+        auto *bar = w->powerBar();
+        QVERIFY(bar->isVisible());
+        QVERIFY(bar->button(Power::Undo)->unlimited());
+        QVERIFY(bar->button(Power::Swap)->unlimited());
+        QVERIFY(bar->button(Power::Remove)->unlimited());
+        QCOMPARE(bar->button(Power::Swap)->toolTip(), QString("Swap two tiles · X"));
+        // With nothing to undo yet, only undo is disabled.
+        QVERIFY(!bar->button(Power::Undo)->isEnabled());
+        QVERIFY(bar->button(Power::Swap)->isEnabled());
+        QVERIFY(bar->button(Power::Remove)->isEnabled());
+        QTest::keyClick(w.get(), Qt::Key_U);
+        QCOMPARE(w->status(), QString("Nothing to undo"));
+
+        // Undo never runs out.
+        for (int round = 0; round < 4; ++round) {
+            const auto before = w->game().cells();
+            moveOnce(*w);
+            QVERIFY(bar->button(Power::Undo)->isEnabled());
+            QTest::keyClick(w.get(), Qt::Key_U);
+            QCOMPARE(w->game().cells(), before);
+        }
+        QCOMPARE(w->game().charges(Power::Undo), 0);
+
+        // Swap and delete can be armed, and used repeatedly, with no charges.
+        Game game(4, Mode::Casual, 1);
+        game.setValues({2, 4, 2, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+        w.reset();
+        w = windowOn(game);
+        bar = w->powerBar();
+        for (int round = 0; round < 3; ++round) {
+            bar->button(Power::Swap)->click();
+            QVERIFY(bar->button(Power::Swap)->isChecked());
+            QCOMPARE(w->board()->pick(), Board::Pick::Swap);
+            clickCell(*w, 0);
+            clickCell(*w, 1);
+            QCOMPARE(w->board()->pick(), Board::Pick::None);
+            QCOMPARE(w->game().at(0).value, round % 2 ? 2 : 4);
+        }
+        QTest::keyClick(w.get(), Qt::Key_R);
+        QCOMPARE(w->board()->pick(), Board::Pick::Remove);
+        clickCell(*w, 3);
+        QVERIFY(w->game().at(3).value == 0);
+        QTest::keyClick(w.get(), Qt::Key_R);
+        QCOMPARE(w->board()->pick(), Board::Pick::Remove);
+        QTest::keyClick(w.get(), Qt::Key_Escape);
+    }
+
+    void casualLossDialogOffersUndo() {
+        Game game(4, Mode::Casual, 1);
+        game.setValues({2, 4, 2, 4, 4, 2, 4, 2, 2, 4, 2, 4, 4, 2, 4, 2});
+        auto w = windowOn(game);
+        QTRY_VERIFY(w->resultModal()->isVisible());
+        auto *secondary = w->resultModal()->findChild<QPushButton *>("secondary");
+        QVERIFY(secondary->isVisible());
+        QVERIFY(secondary->isEnabled());
+        QCOMPARE(secondary->text(), QString("Keep trying"));
+        secondary->click();
+        QVERIFY(w->status().contains("use a power-up"));
+    }
+
     void earnedChargesAreAnnounced() {
         Game game(4, Mode::PowerUps, 1);
         game.setValues({64, 64, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
@@ -427,12 +494,14 @@ private slots:
                 modes << chip->text();
         }
         QCOMPARE(sizes, (QStringList{QString::fromUtf8("3×3"), QString::fromUtf8("4×4"), QString::fromUtf8("5×5")}));
-        QCOMPARE(modes, (QStringList{"Standard", "Classic"}));
+        QCOMPARE(modes, (QStringList{"Standard", "Classic", "Casual"}));
         const auto chips = w->newGameModal()->findChildren<QPushButton *>("chip");
         QVERIFY(chips.at(4)->isChecked() || chips.at(3)->isChecked());
         QVERIFY(chips.at(3)->isChecked());
         auto *hint = w->newGameModal()->findChildren<QLabel *>("muted").last();
         QVERIFY(hint->text().startsWith("Undo, swap"));
+        chips.at(5)->click();
+        QCOMPARE(hint->text(), QString("Unlimited undo, swap, and delete. Just for fun."));
         chips.at(4)->click();
         QCOMPARE(hint->text(), QString("The original game. No power-ups, no undo."));
         chips.at(0)->click();
@@ -737,6 +806,77 @@ private slots:
         w->startNewGame(4, Mode::PowerUps);
         QCOMPARE(w->stats(Mode::Classic).totals().games, 1);
         QCOMPARE(w->stats(Mode::Classic).current().moves, 0);
+    }
+
+    void casualStatsAreKeptSeparately() {
+        auto w = window(presetTheme("midnight"));
+        moveOnce(*w);
+        w->startNewGame(4, Mode::Casual);
+        QCOMPARE(w->stats(Mode::PowerUps).totals().games, 1);
+        QCOMPARE(w->stats(Mode::Casual).totals().games, 0);
+        moveOnce(*w);
+        moveOnce(*w);
+        QTest::keyClick(w.get(), Qt::Key_U);
+        QCOMPARE(w->stats(Mode::Casual).current().moves, 2);
+        QCOMPARE(w->stats(Mode::Casual).current().undos, 1);
+        QCOMPARE(w->stats(Mode::Classic).totals().games, 0);
+        QTRY_VERIFY(QFileInfo::exists(config_ + "/stats-casual.json"));
+
+        // The panel opens on Casual; the other modes are one click away.
+        w->showStats();
+        auto *panel = w->statsPanel();
+        QCOMPARE(panel->mode(), Mode::Casual);
+        auto *casual = buttonNamed(w->statsModal(), "Casual mode statistics");
+        auto *standard = buttonNamed(w->statsModal(), "Standard mode statistics");
+        auto *classic = buttonNamed(w->statsModal(), "Classic mode statistics");
+        QVERIFY(casual && standard && classic);
+        standard->click();
+        QCOMPARE(panel->mode(), Mode::PowerUps);
+        QCOMPARE(statValue(*w, "Games played"), QString("1"));
+        classic->click();
+        QCOMPARE(panel->mode(), Mode::Classic);
+        QCOMPARE(statValue(*w, "Games played"), QString("0"));
+        casual->click();
+        QCOMPARE(panel->mode(), Mode::Casual);
+        // Resetting Casual keeps the other modes.
+        auto *reset = buttonNamed(w->statsModal(), "Reset statistics");
+        reset->click();
+        reset->click();
+        QCOMPARE(w->stats(Mode::Casual).current().undos, 0);
+        QCOMPARE(w->stats(Mode::PowerUps).totals().games, 1);
+        QCOMPARE(w->status(), QString("Casual statistics reset"));
+        const int moves = w->stats(Mode::Casual).current().moves;
+        w->statsModal()->dismiss();
+        w.reset();
+
+        // Casual and its record come back on the next launch.
+        w = window(presetTheme("midnight"));
+        QCOMPARE(w->game().mode(), Mode::Casual);
+        QCOMPARE(w->stats(Mode::Casual).current().moves, moves);
+        QCOMPARE(w->stats(Mode::PowerUps).totals().games, 1);
+    }
+
+    void statsScrollBarHidesWhenIdle() {
+        auto w = window(presetTheme("midnight"));
+        w->resize(w->width(), 560);
+        w->showStats();
+        auto *scroll = w->statsModal()->findChild<QScrollArea *>("statsScroll");
+        QVERIFY(scroll);
+        auto *bar = scroll->verticalScrollBar();
+        auto *content = scroll->widget()->layout();
+        QTRY_VERIFY(bar->maximum() > 0);
+        // The cards leave the bar's width plus a 5 px gap, whether or not the bar is showing.
+        QCOMPARE(content->contentsMargins().right(), bar->sizeHint().width() + 5);
+        QVERIFY(!bar->property("idle").toBool());
+        QTRY_VERIFY_WITH_TIMEOUT(bar->property("idle").toBool(), 2000);
+        QCOMPARE(content->contentsMargins().right(), bar->sizeHint().width() + 5);
+        bar->setValue(bar->maximum());
+        QVERIFY(!bar->property("idle").toBool());
+        QTRY_VERIFY_WITH_TIMEOUT(bar->property("idle").toBool(), 2000);
+        // Without overflow there is no gutter.
+        w->resize(w->width(), 1000);
+        QTRY_COMPARE(bar->maximum(), 0);
+        QCOMPARE(content->contentsMargins().right(), 0);
     }
 
     void statsTabsSwitchPages() {
