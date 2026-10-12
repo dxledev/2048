@@ -100,6 +100,7 @@ private:
     void refresh();
     /** @brief Show the win or game-over modal once the move animation settles. */
     void scheduleResult();
+    void showScheduledResult();
     void showResult(bool win);
     void message(const QString &text);
     void save();

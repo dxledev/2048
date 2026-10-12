@@ -4,7 +4,7 @@ A small, fast 2048 for the Linux desktop, written in C++20 with Qt 6 Widgets. Sl
 
 ## Features
 
-- **Classic rules.** Tiles slide as far as they can, equal pairs merge once per move, and every move adds a 2 (90%) or a 4. Reach 2048 to win, then keep going for bigger tiles.
+- **Classic rules.** Tiles slide as far as they can, equal pairs merge once per move, and every move adds a 2 (90%) or a 4. Reach 2048 to win: the board blurs behind an animated “You won!” until you choose **Keep going** for bigger tiles. Closing the dialog another way leaves the board won; a slide reopens it, and undo takes you back below 2048.
 - **Boards from 3×3 to 8×8**, with a best score kept for each size.
 - **Undo** up to 32 moves. The game, its undo history, and best scores survive restarts.
 - **Statistics** in four tabs (Overview, Tiles, Games, Style) for every board size or all of them together: games, wins and win rate, best and average score, the fastest win, win streaks, play time, how often each tile was reached, a chart of recent scores, the current game, and move directions. Play time counts only while the window is active, and an idle stretch adds at most a minute.

@@ -11,6 +11,7 @@
 #include "core/storage.h"
 #include "core/theme_source.h"
 #include "ui/window.h"
+#include "ui/won_overlay.h"
 
 #include <QApplication>
 #include <QDir>
@@ -175,7 +176,7 @@ private slots:
         auto w = window(presetTheme("midnight"));
         QVERIFY(w->move(Direction::Left));
         QTRY_VERIFY(w->resultModal()->isVisible());
-        w->resultModal()->dismiss();
+        QTest::keyClick(w->resultModal(), Qt::Key_Return);
         QVERIFY(w->game().continued());
         w.reset();
 
@@ -185,6 +186,100 @@ private slots:
         w = window(presetTheme("midnight"));
         QTRY_VERIFY(w->resultModal()->isVisible());
         QCOMPARE(w->best(), 900);
+    }
+
+    void wonOverlay() {
+        Game game(4, 1);
+        game.setValues({1024, 1024, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 100);
+        saveSession(config_ + "/game.json", game, {});
+        auto w = window(presetTheme("midnight"));
+        QVERIFY(QTest::qWaitForWindowExposed(w.get()));
+        auto *board = w->board();
+        auto *overlay = board->findChild<WonOverlay *>("wonOverlay");
+        QVERIFY(overlay);
+        QVERIFY(overlay->isHidden());
+
+        // The overlay waits for the merge animation, then fades in.
+        QVERIFY(w->move(Direction::Left));
+        QVERIFY(w->game().winPending());
+        QVERIFY(overlay->isHidden());
+        QTRY_VERIFY(overlay->isVisible());
+        QCOMPARE(overlay->geometry(), board->boardRect().toRect());
+        QCOMPARE(board->accessibleDescription(), QString("You won"));
+        // The dialog opens only after the reveal, so its blurred backdrop shows "You won!".
+        QTRY_VERIFY(w->resultModal()->isVisible());
+        QCOMPARE(overlay->progress(), 1.0);
+        const auto screenshots = qEnvironmentVariable("G2048_TEST_SCREENSHOTS");
+        if (!screenshots.isEmpty()) {
+            QDir().mkpath(screenshots);
+            QVERIFY(w->grab().save(screenshots + "/won-modal.png"));
+        }
+
+        // Esc leaves the win pending; a move re-opens the result instead of sliding.
+        QTest::keyClick(w->resultModal(), Qt::Key_Escape);
+        QVERIFY(!w->resultModal()->isVisible());
+        QVERIFY(w->game().winPending());
+        QVERIFY(overlay->isVisible());
+        if (!screenshots.isEmpty())
+            QVERIFY(w->grab().save(screenshots + "/won-midnight.png"));
+        const auto cells = w->game().cells();
+        const int moves = w->game().moves();
+        QTest::keyClick(w.get(), Qt::Key_Right);
+        QCOMPARE(w->game().cells(), cells);
+        QCOMPARE(w->game().moves(), moves);
+        QVERIFY(w->resultModal()->isVisible());
+        QTest::keyClick(w->resultModal(), Qt::Key_Escape);
+
+        // The snapshot follows the theme and the overlay follows the board.
+        writeJson(config_ + "/theme.json", presetTheme("paper").toJson());
+        QTRY_COMPARE(w->theme().name, QString("paper"));
+        QVERIFY(overlay->isVisible());
+        QCOMPARE(overlay->progress(), 1.0);
+        if (!screenshots.isEmpty())
+            QVERIFY(w->grab().save(screenshots + "/won-paper.png"));
+        w->resize(w->width() + 120, w->height() + 90);
+        QTRY_COMPARE(overlay->geometry(), board->boardRect().toRect());
+
+        // "New game" cancelled keeps the win; "Keep going" ends it.
+        QTest::keyClick(w.get(), Qt::Key_Left);
+        QVERIFY(w->resultModal()->isVisible());
+        auto *secondary = w->resultModal()->findChild<QPushButton *>("secondary");
+        QCOMPARE(secondary->text(), QString("New game"));
+        secondary->click();
+        QVERIFY(w->newGameModal()->isVisible());
+        QTest::keyClick(w->newGameModal(), Qt::Key_Escape);
+        QVERIFY(w->game().winPending());
+        QVERIFY(overlay->isVisible());
+        QTest::keyClick(w.get(), Qt::Key_Left);
+        QTest::keyClick(w->resultModal(), Qt::Key_Return);
+        QVERIFY(!w->resultModal()->isVisible());
+        QVERIFY(w->game().continued());
+        QVERIFY(overlay->isHidden());
+        QCOMPARE(board->accessibleDescription(), QString());
+        moveOnce(*w);
+        QVERIFY(overlay->isHidden());
+        w.reset();
+
+        // A restored pending win shows at launch, and undoing below 2048 clears it.
+        saveSession(config_ + "/game.json", game, {});
+        w = window(presetTheme("midnight"));
+        QVERIFY(w->move(Direction::Left));
+        QTRY_VERIFY(w->resultModal()->isVisible());
+        QTest::keyClick(w->resultModal(), Qt::Key_Escape);
+        w->close();
+        w.reset();
+        w = window(presetTheme("midnight"));
+        QVERIFY(w->game().winPending());
+        overlay = w->board()->findChild<WonOverlay *>("wonOverlay");
+        QTRY_VERIFY(overlay->isVisible());
+        QTRY_VERIFY(w->resultModal()->isVisible());
+        QTest::keyClick(w->resultModal(), Qt::Key_Escape);
+        QTest::keyClick(w.get(), Qt::Key_U);
+        QVERIFY(!w->game().won());
+        QVERIFY(overlay->isHidden());
+        QVERIFY(w->move(Direction::Left));
+        QTRY_VERIFY(overlay->isVisible());
+        QVERIFY(overlay->progress() < 1);
     }
 
     void statsModalOpensFromKeyAndButton() {

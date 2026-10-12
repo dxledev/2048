@@ -42,6 +42,8 @@ signals:
     void accepted();
 
 protected:
+    bool event(QEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
     void paintEvent(QPaintEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
@@ -55,6 +57,8 @@ private:
     QColor base_, tint_;
     bool dismissable_ = true;
     bool capturing_ = false;
+    /** @brief Center the card at the height its content needs at the card's own width. */
+    void placeCard();
     /** @brief Render, downscale, and blur the background once per open or resize. */
     void capture();
 };

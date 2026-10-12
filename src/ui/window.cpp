@@ -165,6 +165,10 @@ void Window::buildInterface() {
     footer_ = buildFooter();
     board_ = new Board;
     connect(board_, &Board::swiped, this, &Window::move);
+    connect(board_, &Board::winRevealed, this, [this] {
+        if (resultScheduled_)
+            QTimer::singleShot(120, this, &Window::showScheduledResult);
+    });
     layout->addWidget(header_);
     layout->addWidget(toolbar_);
     layout->addWidget(board_, 1);
@@ -305,8 +309,14 @@ void Window::buildResultModal() {
     actions->addWidget(resultPrimary_);
     body->addLayout(actions);
     // Win: primary keeps playing, secondary starts over. Loss: primary starts over, secondary undoes.
+    // Only "Keep going" ends a pending win; any other way out leaves the board marked won.
     connect(resultPrimary_, &QPushButton::clicked, this, [this] {
         if (resultIsWin_) {
+            if (game_.winPending()) {
+                game_.keepPlaying();
+                refresh();
+                save();
+            }
             result_->dismiss();
         } else {
             result_->dismiss();
@@ -322,14 +332,7 @@ void Window::buildResultModal() {
             undo();
     });
     connect(result_, &Modal::accepted, resultPrimary_, &QPushButton::click);
-    connect(result_, &Modal::dismissed, this, [this] {
-        if (resultIsWin_ && game_.winPending()) {
-            game_.keepPlaying();
-            refresh();
-            save();
-        }
-        setFocus();
-    });
+    connect(result_, &Modal::dismissed, this, [this] { setFocus(); });
 }
 
 void Window::buildStatsModal() {
@@ -462,6 +465,12 @@ bool Window::move(Direction direction) {
     if (modalOpen())
         return false;
     board_->finish();
+    if (game_.winPending()) {
+        // A won board stays put until the player chooses to keep going.
+        resultScheduled_ = false;
+        showResult(true);
+        return false;
+    }
     if (!game_.move(direction))
         return false;
     stats_.recordMove(game_, direction, now());
@@ -542,15 +551,20 @@ void Window::scheduleResult() {
     if (resultScheduled_)
         return;
     resultScheduled_ = true;
-    QTimer::singleShot(game_.winPending() ? 260 : 420, this, [this] {
-        if (!resultScheduled_ || modalOpen())
-            return;
-        resultScheduled_ = false;
-        if (game_.winPending())
-            showResult(true);
-        else if (game_.over())
-            showResult(false);
-    });
+    // A win waits for the board's reveal (Board::winRevealed) so the dialog's backdrop shows it.
+    if (game_.winPending() && !board_->showingWin())
+        return;
+    QTimer::singleShot(game_.winPending() ? 260 : 420, this, &Window::showScheduledResult);
+}
+
+void Window::showScheduledResult() {
+    if (!resultScheduled_ || modalOpen())
+        return;
+    resultScheduled_ = false;
+    if (game_.winPending())
+        showResult(true);
+    else if (game_.over())
+        showResult(false);
 }
 
 void Window::showResult(bool win) {
@@ -559,8 +573,9 @@ void Window::showResult(bool win) {
     resultGlyph_->setPixmap(glyphPixmap(win ? Glyph::Trophy : Glyph::Grid, watcher_->theme().color("accent"), 44, ratio));
     if (win) {
         resultTitle_->setText("You made 2048");
-        resultText_->setText(QString("Score %1 in %2 moves. Keep going for a bigger tile, or start fresh.")
-                                 .arg(number(game_.score())).arg(number(game_.moves())));
+        resultText_->setText(QString("Score %1 in %2 %3. Keep going for a bigger tile, or start fresh.")
+                                 .arg(number(game_.score()), number(game_.moves()),
+                                      game_.moves() == 1 ? "move" : "moves"));
         resultPrimary_->setText("Keep going");
         resultSecondary_->setText("New game");
     } else {
@@ -579,6 +594,7 @@ void Window::showResult(bool win) {
 }
 
 void Window::refresh() {
+    board_->refreshWin();
     score_->setText(number(game_.score()));
     bestScore_->setText(number(best()));
     undoButton_->setEnabled(game_.canUndo());

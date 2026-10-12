@@ -6,9 +6,11 @@
  * merged tiles pulse and the new tile grows in. A new move finishes any running
  * animation first, so input is never queued or dropped. Frames are painted
  * directly from game state; no per-tile widgets or cached images are kept.
+ * While a win is pending, a WonOverlay covers the board with a blurred copy.
  */
 #include "board.h"
 #include "core/color.h"
+#include "won_overlay.h"
 
 #include <QMouseEvent>
 #include <QPainter>
@@ -29,7 +31,7 @@ double easeOut(double t) {
 
 }
 
-Board::Board(QWidget *parent) : QWidget(parent) {
+Board::Board(QWidget *parent) : QWidget(parent), wonOverlay_(new WonOverlay(this)) {
     setObjectName("board");
     setAccessibleName("Game board");
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
@@ -40,9 +42,12 @@ Board::Board(QWidget *parent) : QWidget(parent) {
             finish();
         update();
     });
+    connect(wonOverlay_, &WonOverlay::revealed, this, &Board::winRevealed);
 }
 
 void Board::setGame(const Game *game) {
+    wonOverlay_->clear();
+    setAccessibleDescription({});
     game_ = game;
     finish();
     update();
@@ -50,6 +55,8 @@ void Board::setGame(const Game *game) {
 
 void Board::setTheme(const Theme &theme) {
     theme_ = theme;
+    if (!wonOverlay_->isHidden())
+        wonOverlay_->setSnapshot(snapshot(), theme_);
     update();
 }
 
@@ -66,6 +73,34 @@ void Board::finish() {
     timer_.stop();
     turn_ = {};
     update();
+    refreshWin();
+}
+
+void Board::refreshWin() {
+    const bool won = game_ && game_->winPending();
+    if (won && wonOverlay_->isHidden() && !animating()) {
+        wonOverlay_->setGeometry(boardRect().toRect());
+        wonOverlay_->reveal(snapshot(), theme_);
+        setAccessibleDescription("You won");
+    } else if (!won && !wonOverlay_->isHidden()) {
+        wonOverlay_->clear();
+        setAccessibleDescription({});
+    }
+}
+
+bool Board::showingWin() const {
+    return !wonOverlay_->isHidden() && wonOverlay_->progress() >= 1;
+}
+
+QPixmap Board::snapshot() const {
+    // Bound the cached blur independently of window size and display scale.
+    QPixmap image(384, 384);
+    image.fill(Qt::transparent);
+    QPainter painter(&image);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setFont(font());
+    paintBoard(painter, QRectF(image.rect()));
+    return image;
 }
 
 QRectF Board::boardRect() const {
@@ -73,8 +108,7 @@ QRectF Board::boardRect() const {
     return {(width() - side) / 2, (height() - side) / 2, side, side};
 }
 
-QRectF Board::cellRect(int index) const {
-    const auto board = boardRect();
+QRectF Board::cellRect(int index, const QRectF &board) const {
     const int size = game_->size();
     const double gap = std::max(5.0, board.width() * (size > 5 ? .022 : .028));
     const double cell = (board.width() - gap * (size + 1)) / size;
@@ -103,8 +137,11 @@ void Board::paintTile(QPainter &painter, const QRectF &cell, int value, double s
 void Board::paintEvent(QPaintEvent *) {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
-    const auto board = boardRect();
-    const double radius = std::min(16.0, board.width() * .03);
+    paintBoard(painter, boardRect());
+}
+
+void Board::paintBoard(QPainter &painter, const QRectF &board) const {
+    const double radius = cornerRadius(board.width());
     painter.setPen(Qt::NoPen);
     painter.setBrush(theme_.color("board"));
     painter.drawRoundedRect(board, radius, radius);
@@ -113,7 +150,7 @@ void Board::paintEvent(QPaintEvent *) {
     const int cells = game_->size() * game_->size();
     painter.setBrush(theme_.color("cell"));
     for (int index = 0; index < cells; ++index) {
-        const auto cell = cellRect(index);
+        const auto cell = cellRect(index, board);
         const double cellRadius = std::max(4.0, cell.width() * .1);
         painter.drawRoundedRect(cell, cellRadius, cellRadius);
     }
@@ -121,7 +158,7 @@ void Board::paintEvent(QPaintEvent *) {
     if (elapsed < slideMilliseconds && !turn_.motions.empty()) {
         const double t = easeOut(double(elapsed) / slideMilliseconds);
         for (const auto &motion : turn_.motions) {
-            const auto from = cellRect(motion.from), to = cellRect(motion.to);
+            const auto from = cellRect(motion.from, board), to = cellRect(motion.to, board);
             const QRectF cell(from.topLeft() + (to.topLeft() - from.topLeft()) * t, from.size());
             paintTile(painter, cell, motion.value, 1);
         }
@@ -137,8 +174,14 @@ void Board::paintEvent(QPaintEvent *) {
             scale = .35 + .65 * easeOut(pop);
         else if (timer_.isActive() && std::ranges::find(turn_.merged, index) != turn_.merged.end())
             scale = 1 + .12 * std::sin(pop * std::numbers::pi);
-        paintTile(painter, cellRect(index), tile.value, scale);
+        paintTile(painter, cellRect(index, board), tile.value, scale);
     }
+}
+
+void Board::resizeEvent(QResizeEvent *event) {
+    QWidget::resizeEvent(event);
+    // The snapshot has a fixed size, so a resize only moves the overlay.
+    wonOverlay_->setGeometry(boardRect().toRect());
 }
 
 void Board::mousePressEvent(QMouseEvent *event) {

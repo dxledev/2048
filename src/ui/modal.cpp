@@ -19,6 +19,7 @@
 #include <QLayout>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QStyle>
 #include <algorithm>
 
 namespace g2048 {
@@ -47,11 +48,6 @@ Modal::Modal(QWidget *parent, QWidget *background, const QString &name)
     card_->setObjectName("modalCard");
     body_->setContentsMargins(26, 24, 26, 24);
     body_->setSpacing(14);
-    auto *layout = new QVBoxLayout(this);
-    layout->setContentsMargins(20, 20, 20, 20);
-    layout->addStretch();
-    layout->addWidget(card_, 0, Qt::AlignHCenter);
-    layout->addStretch();
     parent->installEventFilter(this);
     hide();
 }
@@ -67,6 +63,7 @@ void Modal::setTheme(const Theme &theme) {
 
 void Modal::open() {
     setGeometry(parentWidget()->rect());
+    placeCard();
     capture();
     show();
     raise();
@@ -113,6 +110,29 @@ void Modal::capture() {
     snapshot_ = std::move(blurred);
     capturing_ = false;
     update();
+}
+
+void Modal::placeCard() {
+    // A layout would ask a wrapping card for its height at the modal's full width,
+    // one text line short at the card's own width, and squeeze its buttons.
+    if (auto *layout = card_->layout())
+        layout->activate();
+    const QRect area = rect().marginsRemoved(QMargins(20, 20, 20, 20));
+    const int width = std::min(area.width(), std::clamp(card_->sizeHint().width(), card_->minimumWidth(), card_->maximumWidth()));
+    const int wanted = card_->hasHeightForWidth() ? card_->heightForWidth(width) : card_->sizeHint().height();
+    const int height = std::min(area.height(), std::clamp(wanted, card_->minimumHeight(), card_->maximumHeight()));
+    card_->setGeometry(QStyle::alignedRect(layoutDirection(), Qt::AlignCenter, QSize(width, height), area));
+}
+
+bool Modal::event(QEvent *event) {
+    if (event->type() == QEvent::LayoutRequest)
+        placeCard();
+    return QWidget::event(event);
+}
+
+void Modal::resizeEvent(QResizeEvent *event) {
+    QWidget::resizeEvent(event);
+    placeCard();
 }
 
 void Modal::paintEvent(QPaintEvent *) {
