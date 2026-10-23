@@ -8,7 +8,6 @@
  */
 #include "cli.h"
 #include "core/game.h"
-#include "core/icon.h"
 #include "core/storage.h"
 #include "core/theme.h"
 #include "core/theme_source.h"
@@ -103,7 +102,6 @@ Material-style keys (primary, on_surface, ...) and light/dark variants.
 Followed files are watched; the window recolors as soon as they change.
 
 Every change is written atomically to theme.json and live-reloaded by open windows.
-icon.svg beside theme.json is redrawn in the theme's colors for launchers to use.
 All commands accept --config-dir DIRECTORY (or GAME_2048_CONFIG_DIR) and --dry-run,
 which prints the resulting JSON without writing anything.
 
@@ -200,8 +198,6 @@ int runThemeCommand(const Options &options) {
         output << QJsonDocument(next.toJson()).toJson();
     } else {
         writeJson(destination, next.toJson());
-        if (destination == path)
-            writeIcon(iconPath(options.configDirectory), next);
         output << destination << '\n';
     }
     return 0;

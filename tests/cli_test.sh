@@ -13,7 +13,6 @@ unset GAME_2048_CONFIG_DIR
 mkdir -p "$HOME"
 config="$work/config"
 theme="$config/theme.json"
-icon="$config/icon.svg"
 
 fail() {
     printf 'cli_test: %s\n' "$*" >&2
@@ -121,12 +120,11 @@ contains "$work/preview.json" '"name": "paper"'
 test ! -e "$config" || fail 'a read-only command or --dry-run created the configuration'
 test ! -e "$work/env" || fail 'theme path created the configuration'
 
-# Presets write theme.json and a themed icon.svg.
+# Presets write theme.json.
 run theme preset paper > /dev/null
-test -f "$theme" && test -f "$icon" || fail 'theme preset did not write theme.json and icon.svg'
+test -f "$theme" || fail 'theme preset did not write theme.json'
 contains "$theme" '"name": "paper"' '"surface": "#fffdf8"' '"version": 1'
 lacks "$theme" '"source"'
-contains "$icon" '<svg' 'fill="#fffdf8"'
 cmp -s "$theme" "$work/preview.json" || fail '--dry-run output differs from the written file'
 
 # Colors: Qt.rgba() keeps alpha on the background; elsewhere alpha is dropped and RGB kept.
@@ -140,16 +138,12 @@ run theme set 'background=#e00e1e36' 'tile_8=#123456' > /dev/null
 contains "$theme" '"background": "#e00e1e36"' '"tile_8": "#123456"'
 run theme set 'tile_8=' > /dev/null
 lacks "$theme" 'tile_8'
-cp "$icon" "$work/custom-icon.svg"
 
 # Named themes from THEMES_DIR are followed statically.
 run theme use harbor > /dev/null
 contains "$theme" '"name": "harbor"' '"background": "#e00e1e36"' '"accent": "#5fb3f9"' \
     '"accent_text": "#04182b"' '"secondary": "#c792ea"' '"highlight": "#ffcb6b"' \
     '"kind": "static"' "\"path\": \"$THEMES_DIR/harbor\""
-if cmp -s "$icon" "$work/custom-icon.svg"; then
-    fail 'icon.svg was not redrawn for the new theme'
-fi
 
 # "follow active" picks the current link and survives retargeting it.
 run theme follow active > /dev/null

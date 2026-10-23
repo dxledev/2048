@@ -137,22 +137,4 @@ QPixmap brandMark(const Theme &theme, int size, qreal ratio) {
     return result;
 }
 
-QIcon applicationIcon(const Theme &theme) {
-    QIcon icon;
-    for (const int size : {16, 32, 64, 128}) {
-        QPixmap pixmap(size, size);
-        pixmap.fill(Qt::transparent);
-        QPainter painter(&pixmap);
-        painter.setRenderHint(QPainter::Antialiasing);
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(opaque(theme.color("surface")));
-        painter.drawRoundedRect(QRectF(0, 0, size, size), size * .22, size * .22);
-        painter.drawPixmap(QRectF(size * .18, size * .18, size * .64, size * .64),
-                           brandMark(theme, int(size * .64), 1), QRectF());
-        painter.end();
-        icon.addPixmap(pixmap);
-    }
-    return icon;
-}
-
 }

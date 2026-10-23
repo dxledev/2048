@@ -10,7 +10,6 @@
  */
 #include "window.h"
 #include "core/color.h"
-#include "core/icon.h"
 #include "chip.h"
 #include "icons.h"
 
@@ -152,6 +151,7 @@ Window::Window(QString configDirectory, Theme theme, int size, bool translucent,
       watcher_(new ThemeWatcher(configDirectory_ + "/theme.json", std::move(theme), this)),
       game_(size ? size : 4) {
     setWindowTitle("2048");
+    setWindowIcon(QIcon::fromTheme("io.github.game2048"));
     setObjectName("gameWindow");
     setFocusPolicy(Qt::StrongFocus);
     // Wayland surfaces always carry alpha; elsewhere an ARGB window may render black.
@@ -574,12 +574,6 @@ void Window::applyTheme() {
     statsButton_->setIcon(glyphIcon(Glyph::Chart, text, muted, ratio));
     newButton_->setIcon(glyphIcon(Glyph::Restart, theme.color("accent_text"), muted, ratio));
     brand_->setPixmap(brandMark(theme, 38, ratio));
-    setWindowIcon(applicationIcon(theme));
-    try {
-        writeIcon(iconPath(configDirectory_), theme);
-    } catch (const std::exception &) {
-        // A read-only configuration directory only costs the launcher icon its colors.
-    }
     themeName_->setText("Theme · " + theme.name);
     board_->setTheme(theme);
     powerBar_->setTheme(theme);

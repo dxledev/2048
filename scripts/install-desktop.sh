@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Per-user installation of 2048: the executable, a desktop entry whose icon is
-# redrawn in the game's theme colors, an optional launcher-list entry, and an
+# Per-user installation of 2048: the executable, a desktop entry with a
+# fixed colored icon, an optional launcher-list entry, and an
 # initial theme. Every file is replaced atomically, files whose content would
 # change are backed up first, and --dry-run reports the plan without writing.
 set -euo pipefail
@@ -110,8 +110,7 @@ set_paths() {
     registered="$install_prefix/share/applications/$desktop_id.desktop"
     fallback_icon="$install_prefix/share/icons/hicolor/scalable/apps/$desktop_id.svg"
     theme_file="$config_directory/theme.json"
-    themed_icon="$config_directory/icon.svg"
-    apps_entry="$desktop_id.desktop|$themed_icon|$app_label"
+    apps_entry="$desktop_id.desktop|$fallback_icon|$app_label"
 }
 
 # Refuse to write through a symlink or over a directory.
@@ -143,7 +142,7 @@ validate() {
     require_plain_path --config-dir "$config_directory"
     [[ ! -e "$config_directory" || -d "$config_directory" ]] ||
         fail "Configuration path is not a directory: $config_directory"
-    for target in "$executable" "$desktop_file" "$fallback_icon" "$theme_file" "$themed_icon"; do
+    for target in "$executable" "$desktop_file" "$fallback_icon" "$theme_file"; do
         require_plain_target "$target"
     done
     if [[ -L "$registered" ]]; then
@@ -207,10 +206,6 @@ plan_theme() {
         else
             theme_note="keeps the current palette ($(json_field name "$current_json"))"
         fi
-        if [[ ! -f "$themed_icon" ]] && (( ! has_source )); then
-            theme_args=(refresh)
-            theme_preview="$current_json"
-        fi
     fi
 }
 
@@ -260,9 +255,8 @@ install_fallback_icon() {
 }
 
 desktop_entry() {
-    awk -v executable="$executable" -v config="$config_directory" -v icon="$themed_icon" '
+    awk -v executable="$executable" -v config="$config_directory" '
         /^Exec=/ { print "Exec=\"" executable "\" --config-dir \"" config "\""; next }
-        /^Icon=/ { print "Icon=" icon; next }
         { print }' "$project_directory/assets/$desktop_id.desktop"
 }
 
@@ -284,10 +278,10 @@ install_desktop_entry() {
 }
 
 # Rewrite the app list: keep every unrelated line as is, point the first entry for this
-# app at the themed icon and label (extra fields survive), drop duplicates, or append one.
+# app at the installed icon and label (extra fields survive), drop duplicates, or append one.
 updated_apps_list() {
     if [[ -f "$apps_list" ]]; then
-        awk -v id="$desktop_id.desktop" -v icon="$themed_icon" -v label="$app_label" '
+        awk -v id="$desktop_id.desktop" -v icon="$fallback_icon" -v label="$app_label" '
             BEGIN { FS = OFS = "|" }
             $1 == id { if (!found) { $2 = icon; $3 = label; print; found = 1 } next }
             { print }
@@ -328,19 +322,12 @@ configure_theme() {
     if (( ${#theme_args[@]} )); then
         local current=""
         [[ -f "$theme_file" ]] && current="$(< "$theme_file")"
-        if [[ -n "$current" && "$current" == "$theme_preview" && -f "$themed_icon" ]]; then
+        if [[ -n "$current" && "$current" == "$theme_preview" ]]; then
             theme_note+="; unchanged"
         else
             [[ -n "$current" && "$current" != "$theme_preview" ]] && backup_file "$theme_file"
             "$executable" --config-dir "$config_directory" theme "${theme_args[@]}" >/dev/null
         fi
-    fi
-    # The launcher entry points at icon.svg; the game redraws it in theme colors on start.
-    if [[ ! -f "$themed_icon" ]]; then
-        local temporary
-        temporary="$(new_temporary "$config_directory")"
-        install -m644 -- "$project_directory/assets/$desktop_id.svg" "$temporary"
-        mv -fT -- "$temporary" "$themed_icon"
     fi
 }
 
@@ -353,7 +340,7 @@ print_plan() {
         'Desktop entry' "$desktop_file" \
         'Registration' "$registered -> $desktop_file" \
         'Exec' "\"$executable\" --config-dir \"$config_directory\"" \
-        'Icon' "$themed_icon" \
+        'Icon' "$fallback_icon" \
         'App list' "$apps_list_note" \
         'Theme' "$theme_note"
 }
@@ -363,7 +350,7 @@ print_summary() {
     printf '  %-15s %s\n' \
         'Executable' "$executable" \
         'Desktop entry' "$registered" \
-        'Icon' "$themed_icon (redrawn with the theme)" \
+        'Icon' "$fallback_icon" \
         'App list' "$apps_list_note" \
         'Theme' "$theme_note" \
         'Configuration' "$config_directory"

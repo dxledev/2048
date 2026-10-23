@@ -8,7 +8,6 @@
  * set per test to a fixture directory, so the real configuration is never read.
  */
 #include "core/color.h"
-#include "core/icon.h"
 #include "core/storage.h"
 #include "core/theme.h"
 #include "core/theme_source.h"
@@ -1437,62 +1436,6 @@ private slots:
             for (const auto &watched : paths)
                 QVERIFY2(watched.startsWith(home + "/"), qPrintable(context));
         }
-    }
-
-    // ---- icon.h ----------------------------------------------------------------------------
-
-    void iconSvgColors() {
-        const auto theme = presetTheme("midnight");
-        const auto svg = iconSvg(theme);
-        QVERIFY(svg.startsWith("<svg"));
-        QVERIFY(svg.contains(("fill=\"" + theme.color("surface").name() + "\"").toUtf8()));
-        QVERIFY(svg.contains("#181b24"));
-        for (const int step : {1, 4, 7, 10})
-            QVERIFY2(svg.contains(theme.tiles[step].name().toUtf8()), qPrintable(QString::number(step)));
-        QXmlStreamReader xml(svg);
-        int rects = 0;
-        while (!xml.atEnd()) {
-            if (xml.readNext() == QXmlStreamReader::StartElement && xml.name() == QLatin1String("rect"))
-                ++rects;
-        }
-        QVERIFY2(!xml.hasError(), qPrintable(xml.errorString()));
-        QCOMPARE(rects, 5);
-        QCOMPARE(iconSvg(theme), svg);
-        QVERIFY(iconSvg(presetTheme("paper")) != svg);
-        // A translucent background never leaks alpha into the icon.
-        const auto translucent = setColors(theme, {"background=#800e1e36", "surface=#80223344"});
-        QVERIFY(iconSvg(translucent).contains("fill=\"#223344\""));
-        QCOMPARE(iconPath("/config/2048"), QString("/config/2048/icon.svg"));
-    }
-
-    void writeIconSkipsIdentical() {
-        QTemporaryDir dir;
-        QVERIFY(dir.isValid());
-        const QString path = dir.filePath("nested/config/icon.svg");
-        const auto midnight = presetTheme("midnight"), paper = presetTheme("paper");
-        writeIcon(path, midnight);
-        QCOMPARE(readFile(path), iconSvg(midnight));
-
-        const auto old = fs::file_time_type::clock::now() - std::chrono::hours(24 * 400);
-        fs::last_write_time(nativePath(path), old);
-        const auto stamp = fs::last_write_time(nativePath(path));
-        const auto inode = inodeOf(path);
-        QVERIFY(inode != 0);
-        writeIcon(path, midnight);
-        QCOMPARE(inodeOf(path), inode);
-        QVERIFY(fs::last_write_time(nativePath(path)) == stamp);
-        QCOMPARE(readFile(path), iconSvg(midnight));
-
-        writeIcon(path, paper);
-        QCOMPARE(readFile(path), iconSvg(paper));
-        QVERIFY(fs::last_write_time(nativePath(path)) != stamp);
-
-        // A stale or foreign file is replaced.
-        QVERIFY(writeFile(path, "<svg/>"));
-        writeIcon(path, paper);
-        QCOMPARE(readFile(path), iconSvg(paper));
-        QVERIFY(QDir(dir.path()).entryList(QDir::Files | QDir::Hidden).isEmpty());
-        QCOMPARE(QDir(dir.filePath("nested/config")).entryList(QDir::Files | QDir::Hidden), QStringList{"icon.svg"});
     }
 
     // ---- storage.h -------------------------------------------------------------------------

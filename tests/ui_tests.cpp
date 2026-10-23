@@ -1018,7 +1018,6 @@ private slots:
         auto w = window(theme);
         relink(themes_ + "/current", "nord");
         QTRY_COMPARE(w->theme().hex("accent"), QString("#88c0d0"));
-        QTRY_VERIFY(QFile(config_ + "/icon.svg").open(QIODevice::ReadOnly));
     }
 };
 

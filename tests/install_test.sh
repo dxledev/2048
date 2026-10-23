@@ -24,7 +24,7 @@ executable="$prefix/bin/2048"
 desktop="$prefix/bin/applications/$desktop_id.desktop"
 registered="$prefix/share/applications/$desktop_id.desktop"
 fallback="$prefix/share/icons/hicolor/scalable/apps/$desktop_id.svg"
-entry="$desktop_id.desktop|$config/icon.svg|2048"
+entry="$desktop_id.desktop|$fallback|2048"
 header='icon-override = true'
 unrelated='example.desktop|/usr/share/icons/example.svg|Example App|extra'
 
@@ -85,7 +85,7 @@ arguments=(--prefix "$prefix" --config-dir "$config" --apps-list "$apps")
 before="$(snapshot)"
 install "${arguments[@]}" --dry-run > "$log/dry-run"
 contains "$log/dry-run" 'Dry run' "$executable" "$desktop" "$registered" "$fallback" \
-    "\"$executable\" --config-dir \"$config\"" "$config/icon.svg" "$apps" "$THEMES_DIR/current"
+    "\"$executable\" --config-dir \"$config\"" "$fallback" "$apps" "$THEMES_DIR/current"
 [[ "$(snapshot)" == "$before" ]] || fail '--dry-run changed files'
 test ! -e "$prefix" && test ! -e "$config" || fail '--dry-run created the prefix or configuration'
 
@@ -98,7 +98,7 @@ cmp -s "$executable" "$build_directory/2048" || fail 'installed executable diffe
 cmp -s "$fallback" "$source_directory/assets/$desktop_id.svg" || fail 'fallback icon not installed'
 test -f "$desktop" && test ! -L "$desktop" || fail 'desktop entry not written'
 has_line "$desktop" "Exec=\"$executable\" --config-dir \"$config\""
-has_line "$desktop" "Icon=$config/icon.svg"
+has_line "$desktop" "Icon=$desktop_id"
 has_line "$desktop" 'Name=2048'
 has_line "$desktop" "StartupWMClass=$desktop_id"
 test -L "$registered" || fail 'desktop entry is not registered with a symlink'
@@ -111,7 +111,6 @@ fi
 [[ "$(grep -Fxc -- "$entry" "$apps")" == 1 && "$(wc -l < "$apps")" == 3 ]] || fail 'app list entry missing'
 contains "$config/theme.json" '"name": "harbor"' '"kind": "active"' "\"path\": \"$THEMES_DIR/current\"" \
     '"background": "#e00e1e36"'
-contains "$config/icon.svg" '<svg'
 [[ -z "$(find "$XDG_CONFIG_HOME" -mindepth 1)" && "$(find "$HOME" -mindepth 1)" == "$XDG_CONFIG_HOME" ]] ||
     fail 'the installer touched the home directory'
 
@@ -171,18 +170,10 @@ fi
 install --prefix "$prefix" --config-dir "$custom" --no-apps-list --follow > /dev/null
 contains "$custom/theme.json" '"name": "harbor"' '"kind": "active"'
 
-# An existing theme without icon.svg keeps its colors and gains a themed icon.
-kept="$root/kept"
-mkdir -p "$kept"
-cp "$source_directory/themes/ember.json" "$kept/theme.json"
-install --prefix "$prefix" --config-dir "$kept" --no-apps-list > /dev/null
-contains "$kept/theme.json" '"name": "ember"'
-contains "$kept/icon.svg" 'fill="#201813"'
-
-# --no-follow on a fresh configuration still creates theme.json and icon.svg.
+# --no-follow on a fresh configuration still creates theme.json.
 fresh="$root/fresh"
 install --prefix "$prefix" --config-dir "$fresh" --no-apps-list --no-follow > /dev/null
-test -f "$fresh/theme.json" && test -f "$fresh/icon.svg" || fail '--no-follow left no theme'
+test -f "$fresh/theme.json" || fail '--no-follow left no theme'
 
 # Without an active theme link a fresh configuration gets the built-in default.
 mv "$THEMES_DIR" "$root/themes.away"
@@ -193,7 +184,6 @@ contains "$plain/theme.json" '"name": "midnight"'
 if grep -Fq '"source"' "$plain/theme.json"; then
     fail 'default theme follows a source'
 fi
-test -f "$plain/icon.svg" || fail 'default theme has no icon.svg'
 refuses '--follow without an active theme link' "${arguments[@]}" --follow
 rmdir "$THEMES_DIR"
 mv "$root/themes.away" "$THEMES_DIR"

@@ -13,7 +13,6 @@ add_library(g2048_core
     src/core/game.cpp
     src/core/storage.cpp
     src/core/color.cpp
-    src/core/icon.cpp
     src/core/theme.cpp
     src/core/theme_source.cpp
     src/core/stats.cpp

@@ -13,7 +13,7 @@ A small, fast 2048 for the Linux desktop, written in C++20 with Qt 6 Widgets. Sl
 - **Resizable window.** The board scales with the window, and the buttons collapse to icons when space is tight. In a wide window the header spreads across it with the scores in the middle, and the board stays centered.
 - **Native Wayland**, with a **translucent window** when the theme background has an alpha channel.
 - **In-window modal dialogs** over a blurred backdrop instead of separate popup windows.
-- **Painter-drawn icons.** Every glyph, and the launcher icon `icon.svg`, is drawn in the theme's colors.
+- **Painter-drawn icons.** Every glyph is drawn in the theme's colors; the launcher icon is a fixed colored SVG.
 - **Low memory use:** native C++ and Qt Widgets, raster rendering into shared-memory buffers, no GPU, no QML.
 
 ## Build and install
@@ -39,7 +39,7 @@ scripts/install-desktop.sh
 The script does the following:
 
 - Installs `~/.local/bin/2048` atomically, along with a fallback icon in `~/.local/share/icons/hicolor`.
-- Writes the desktop entry to `~/.local/bin/applications` and links it into `~/.local/share/applications`. Its `Exec` passes `--config-dir`, and its `Icon` points at the themed `icon.svg`, so the launcher icon recolors together with the game.
+- Writes the desktop entry to `~/.local/bin/applications` and links it into `~/.local/share/applications`. Its `Exec` passes `--config-dir`, and its `Icon` is the installed `io.github.game2048` icon.
 - Sets up a theme. A fresh configuration follows your active theme link when one exists and otherwise gets the built-in default. A palette you have already chosen is kept, unless you pass `--follow`.
 - If `~/.config/apps.list` exists, adds or updates a `io.github.game2048.desktop|ICON|2048` line in it and leaves every other line untouched.
 
@@ -74,7 +74,7 @@ The last game resumes on launch. `2048 --size 5` plays on a 5×5 board; a saved 
 
 ## Theming
 
-The game follows your active theme automatically. To override it, use the command line: every command validates the full palette and replaces `theme.json` atomically. It also redraws `icon.svg`, and open windows recolor at once. Add `--dry-run` to any command to print the resulting JSON without writing anything.
+The game follows your active theme automatically. To override it, use the command line: every command validates the full palette and replaces `theme.json` atomically. Open windows recolor at once. Add `--dry-run` to any command to print the resulting JSON without writing anything.
 
 ```sh
 2048 theme list                         # presets, your themes, and the active link
@@ -160,10 +160,6 @@ A palette needs a background, a foreground, and a primary or accent color. The g
 
 Followed sources are watched for edits, atomic replacements, and relinked symlinks. Changes appear in open windows almost immediately, and the resolved colors are saved back to `theme.json`. A missing or half-written palette keeps the last valid colors. `preset`, `set`, and `import` stop following; `detach` stops following and keeps the current colors.
 
-### Launcher icon
-
-`icon.svg` sits beside `theme.json` and is redrawn whenever the theme changes, from the command line or in a running window. Point a desktop entry's `Icon=` at it to get a launcher icon that matches the game; `scripts/install-desktop.sh` does this for you.
-
 ## Files and environment
 
 | Path or variable | Purpose |
@@ -173,7 +169,6 @@ Followed sources are watched for edits, atomic replacements, and relinked symlin
 | `~/.config/2048/stats-casual.json` | Casual statistics, in the same format |
 | `~/.config/2048/stats-classic.json` | Classic statistics, in the same format |
 | `~/.config/2048/theme.json` | Palette and the followed source |
-| `~/.config/2048/icon.svg` | Launcher icon in the theme's colors |
 | `GAME_2048_CONFIG_DIR` | Use another configuration directory (same as `--config-dir`) |
 | `XDG_CONFIG_HOME` | Base for the configuration and themes directories (default `~/.config`) |
 | `THEMES_DIR` | Directory of named themes (default `$XDG_CONFIG_HOME/themes`) |
