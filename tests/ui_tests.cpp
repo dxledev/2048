@@ -1021,5 +1021,11 @@ private slots:
     }
 };
 
-QTEST_MAIN(UiTests)
+int main(int argc, char **argv) {
+    // Modals animate in and out; tests expect them to open and close immediately.
+    qputenv("G2048_REDUCED_MOTION", "1");
+    QApplication app(argc, argv);
+    UiTests tests;
+    return QTest::qExec(&tests, argc, argv);
+}
 #include "ui_tests.moc"

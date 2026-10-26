@@ -24,6 +24,7 @@ add_library(g2048_ui
     src/ui/chip.cpp
     src/ui/icons.cpp
     src/ui/modal.cpp
+    src/ui/modal_motion.cpp
     src/ui/board.cpp
     src/ui/power_bar.cpp
     src/ui/won_overlay.cpp

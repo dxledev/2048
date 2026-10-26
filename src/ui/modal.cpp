@@ -11,7 +11,9 @@
  */
 #include "modal.h"
 #include "core/color.h"
+#include "modal_motion.h"
 
+#include <QApplication>
 #include <QGraphicsBlurEffect>
 #include <QGraphicsPixmapItem>
 #include <QGraphicsScene>
@@ -48,6 +50,13 @@ Modal::Modal(QWidget *parent, QWidget *background, const QString &name)
     card_->setObjectName("modalCard");
     body_->setContentsMargins(26, 24, 26, 24);
     body_->setSpacing(14);
+    motion_ = new ModalMotion(card_);
+    card_->setGraphicsEffect(motion_);
+    connect(motion_, &ModalMotion::progressChanged, this, qOverload<>(&QWidget::update));
+    connect(motion_, &ModalMotion::finished, this, [this](bool open) {
+        if (!open && closing_)
+            finishDismiss();
+    });
     parent->installEventFilter(this);
     hide();
 }
@@ -62,19 +71,36 @@ void Modal::setTheme(const Theme &theme) {
 }
 
 void Modal::open() {
+    if (!isVisible()) {
+        previousFocus_ = QApplication::focusWidget();
+        motion_->reset();
+    }
+    closing_ = false;
+    card_->setAttribute(Qt::WA_TransparentForMouseEvents, false);
     setGeometry(parentWidget()->rect());
     placeCard();
     capture();
     show();
     raise();
     setFocus(Qt::OtherFocusReason);
+    motion_->animate(true);
 }
 
 void Modal::dismiss() {
-    if (!isVisible())
+    if (!isVisible() || closing_)
         return;
+    closing_ = true;
+    card_->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+    motion_->animate(false);
+}
+
+void Modal::finishDismiss() {
+    closing_ = false;
     hide();
     snapshot_ = QPixmap();
+    if (previousFocus_ && previousFocus_->isEnabled() && previousFocus_->isVisible())
+        previousFocus_->setFocus();
+    previousFocus_.clear();
     emit dismissed();
 }
 
@@ -141,20 +167,24 @@ void Modal::paintEvent(QPaintEvent *) {
     painter.fillRect(rect(), Qt::transparent);
     painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
     painter.setRenderHint(QPainter::SmoothPixmapTransform);
-    painter.setOpacity(base_.alphaF());
+    painter.setOpacity(base_.alphaF() * motion_->progress());
     painter.drawPixmap(rect(), snapshot_);
-    painter.fillRect(rect(), tint_);
+    auto tint = tint_;
+    tint.setAlphaF(tint.alphaF() * motion_->progress());
+    painter.fillRect(rect(), tint);
 }
 
 void Modal::mousePressEvent(QMouseEvent *event) {
     event->accept();
-    if (dismissable_ && !card_->geometry().contains(event->position().toPoint()))
+    if (!closing_ && dismissable_ && !card_->geometry().contains(event->position().toPoint()))
         dismiss();
 }
 
 void Modal::keyPressEvent(QKeyEvent *event) {
     // Consume every key so nothing reaches the board behind the modal.
     event->accept();
+    if (closing_)
+        return;
     if (event->key() == Qt::Key_Escape && dismissable_)
         dismiss();
     else if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter)
@@ -166,6 +196,9 @@ bool Modal::eventFilter(QObject *watched, QEvent *event) {
         setGeometry(parentWidget()->rect());
         capture();
     }
+    if (closing_ && (event->type() == QEvent::KeyPress || event->type() == QEvent::KeyRelease ||
+                     event->type() == QEvent::Wheel || event->type() == QEvent::ShortcutOverride))
+        return true;
     return QWidget::eventFilter(watched, event);
 }
 

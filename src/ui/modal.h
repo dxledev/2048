@@ -4,9 +4,12 @@
 #include <QFrame>
 #include <QPixmap>
 #include <QVBoxLayout>
+#include <QPointer>
 #include <QWidget>
 
 namespace g2048 {
+
+class ModalMotion;
 
 /**
  * @brief In-window modal: a blurred snapshot of the game, a tint, and a centered card.
@@ -32,7 +35,7 @@ public:
     void open();
 
 public slots:
-    /** @brief Hide the modal, release its snapshot, and emit dismissed(). */
+    /** @brief Fade the modal out, then hide it, release its snapshot, and emit dismissed(). */
     void dismiss();
 
 signals:
@@ -51,6 +54,9 @@ protected:
 
 private:
     QWidget *background_;
+    QPointer<QWidget> previousFocus_;
+    ModalMotion *motion_;
+    bool closing_ = false;
     QFrame *card_;
     QVBoxLayout *body_;
     QPixmap snapshot_;
@@ -59,6 +65,8 @@ private:
     bool capturing_ = false;
     /** @brief Center the card at the height its content needs at the card's own width. */
     void placeCard();
+    /** @brief Hide the card and restore focus once the fade-out ends. */
+    void finishDismiss();
     /** @brief Render, downscale, and blur the background once per open or resize. */
     void capture();
 };
