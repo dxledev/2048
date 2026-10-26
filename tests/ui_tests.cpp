@@ -155,6 +155,21 @@ private slots:
         QCOMPARE(topLevel, 1);
     }
 
+    void modalNeverDimsTheWindowWhileFading() {
+        qunsetenv("G2048_REDUCED_MOTION");
+        const auto restore = qScopeGuard([] { qputenv("G2048_REDUCED_MOTION", "1"); });
+        auto w = window(presetTheme("midnight"));
+        QVERIFY(QTest::qWaitForWindowExposed(w.get()));
+        auto *modal = w->newGameModal();
+        const int before = w->grab().toImage().pixelColor(2, 2).alpha();
+        w->requestNewGame();
+        for (int i = 0; i < 8; ++i) {
+            // Card-free corner: the backdrop alone must keep the window as opaque as before.
+            QVERIFY(modal->grab().toImage().pixelColor(2, 2).alpha() >= before - 1);
+            QTest::qWait(20);
+        }
+    }
+
     void newGameModalChangesBoardSize() {
         auto w = window(presetTheme("midnight"));
         w->requestNewGame();

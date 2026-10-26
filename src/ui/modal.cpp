@@ -97,7 +97,7 @@ void Modal::dismiss() {
 void Modal::finishDismiss() {
     closing_ = false;
     hide();
-    snapshot_ = QPixmap();
+    snapshot_ = frame_ = QPixmap();
     if (previousFocus_ && previousFocus_->isEnabled() && previousFocus_->isVisible())
         previousFocus_->setFocus();
     previousFocus_.clear();
@@ -111,10 +111,21 @@ void Modal::capture() {
     if (background_->layout())
         background_->layout()->activate();
     const qreal ratio = background_->devicePixelRatioF();
-    QImage image(background_->size() * ratio, QImage::Format_RGB32);
+    // The unblurred frame keeps the window's own translucency; it is painted under the fading
+    // blur so the window never goes blank while the modal comes up.
+    QImage frame(background_->size() * ratio, QImage::Format_ARGB32_Premultiplied);
+    frame.setDevicePixelRatio(ratio);
+    // The window background belongs to the surface behind the content, so paint it in here.
+    frame.fill(base_);
+    background_->render(&frame, QPoint(), QRegion(), QWidget::DrawChildren);
+    frame_ = QPixmap::fromImage(frame);
+    QImage image(frame.size(), QImage::Format_RGB32);
     image.setDevicePixelRatio(ratio);
     image.fill(opaque(base_));
-    background_->render(&image, QPoint(), QRegion(), QWidget::DrawChildren);
+    {
+        QPainter flatten(&image);
+        flatten.drawImage(QPoint(), frame);
+    }
     // Blur a reduced copy once; the open modal retains only this small image.
     auto reducedSize = (background_->size() / 3).expandedTo(QSize(1, 1));
     if (reducedSize.width() > 640 || reducedSize.height() > 640)
@@ -133,6 +144,12 @@ void Modal::capture() {
     QPainter painter(&blurred);
     scene.render(&painter, QRectF(QPointF(), reduced.size()), QRectF(QPointF(padding, padding), reduced.size()));
     painter.end();
+    if (base_.alpha() < 255) {
+        // Carry the theme's translucency in the blur so it can replace the frame as-is.
+        QPainter alpha(&blurred);
+        alpha.setCompositionMode(QPainter::CompositionMode_DestinationIn);
+        alpha.fillRect(blurred.rect(), QColor(0, 0, 0, base_.alpha()));
+    }
     snapshot_ = std::move(blurred);
     capturing_ = false;
     update();
@@ -165,10 +182,13 @@ void Modal::paintEvent(QPaintEvent *) {
     QPainter painter(this);
     painter.setCompositionMode(QPainter::CompositionMode_Source);
     painter.fillRect(rect(), Qt::transparent);
-    painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+    painter.drawPixmap(rect(), frame_);
+    // Source with a partial opacity lerps toward the blur, so alpha stays at the theme's own
+    // (the blur carries it) and the window never dips transparent while the modal comes up.
     painter.setRenderHint(QPainter::SmoothPixmapTransform);
-    painter.setOpacity(base_.alphaF() * motion_->progress());
+    painter.setOpacity(motion_->progress());
     painter.drawPixmap(rect(), snapshot_);
+    painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
     auto tint = tint_;
     tint.setAlphaF(tint.alphaF() * motion_->progress());
     painter.fillRect(rect(), tint);

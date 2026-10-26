@@ -59,7 +59,7 @@ private:
     bool closing_ = false;
     QFrame *card_;
     QVBoxLayout *body_;
-    QPixmap snapshot_;
+    QPixmap snapshot_, frame_;
     QColor base_, tint_;
     bool dismissable_ = true;
     bool capturing_ = false;
